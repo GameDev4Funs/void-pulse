@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>VOID PULSE — 霓虹深渊幸存者</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128126;</text></svg>">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- 屏幕特效层 -->
+<div id="vignette"></div>
+<div id="lowhp"></div>
+<div id="flash"></div>
+<div id="text-layer"></div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="hud-left">
+    <div class="bar-label">HULL <span id="hp-num">100</span></div>
+    <div id="hp-bar" class="bar"><div id="hp-fill"></div></div>
+    <div id="xp-bar" class="bar"><div id="xp-fill"></div></div>
+    <div id="routes"></div>
+    <div id="roster"></div>
+  </div>
+  <div id="level-badge">LV <span id="level-num">1</span></div>
+  <div id="hud-center">
+    <div id="sector-label">SECTOR 1</div>
+    <div id="boss-banner" class="hidden">⚠ VOID OVERLORD 逼近 ⚠</div>
+    <div id="toast" class="hidden"></div>
+  </div>
+  <div id="hud-right">
+    <div id="score">0</div>
+    <div id="hud-sub"><span id="timer">0:00</span> · <span id="kills">0</span> 击杀</div>
+    <div id="best-line">BEST <span id="best-score">0</span></div>
+    <div id="chain" class="hidden">🔥 连锁 <span id="chain-num">0</span></div>
+  </div>
+  <div id="hud-bottom">
+    <div id="dash-wrap" title="冲刺">
+      <svg viewBox="0 0 40 40"><circle id="dash-ring" cx="20" cy="20" r="16"/></svg>
+      <span>⇢</span>
+    </div>
+    <div id="pulse-wrap">
+      <div id="pulse-label">OVERDRIVE <span id="pulse-key">[Q]</span></div>
+      <div id="pulse-bar" class="bar"><div id="pulse-fill"></div></div>
+    </div>
+    <div id="ult-wrap">
+      <div id="ult-label">湮灭协议 <span>[E]</span></div>
+      <div id="ult-bar" class="bar"><div id="ult-fill"></div></div>
+    </div>
+  </div>
+  <div id="hud-hints">ESC 暂停 · M 静音 · SPACE 冲刺 · Q 超载 · E 湮灭</div>
+</div>
+
+<!-- 触屏控件 -->
+<div id="touch-ui" class="hidden">
+  <div id="stick-zone"><div id="stick-base"><div id="stick-nub"></div></div></div>
+  <div id="btn-dash" class="touch-btn">⇢</div>
+  <div id="btn-pulse" class="touch-btn">Q</div>
+</div>
+
+<!-- 标题画面 -->
+<div id="title-screen" class="overlay">
+  <div class="title-core">
+    <div id="game-logo">VOID<span>PULSE</span></div>
+    <div id="game-sub">霓 虹 深 渊 · 幸 存 者</div>
+    <div class="title-desc">异空间虫群已突破防线。驾驶幽灵战机，在无尽的霓虹兽潮中活下来。<br>击杀 → 拾取碎片 → 选流派叠 Combo → 进化武器 → 超载清场。单人或组队都行。</div>
+    <div class="title-btns">
+      <div id="start-btn" class="big-btn">单 机 出 击</div>
+      <div id="mp-btn" class="big-btn big-btn-alt">组 队 联 机</div>
+    </div>
+    <!-- 联机面板 -->
+    <div id="mp-panel" class="hidden">
+      <div class="mp-row">
+        <input id="mp-name" class="mp-input" maxlength="10" placeholder="你的昵称" autocomplete="off">
+      </div>
+      <div class="mp-row mp-split">
+        <div class="mp-col">
+          <div id="mp-create-btn" class="small-btn">创建房间</div>
+          <div class="mp-hint">自动生成房名和密码</div>
+        </div>
+        <div class="mp-col">
+          <div class="mp-join-inputs">
+            <input id="mp-room" class="mp-input" maxlength="14" placeholder="房名 如 NEBULA-42" autocomplete="off">
+            <input id="mp-pass" class="mp-input" maxlength="6" placeholder="密码 4 位" autocomplete="off">
+          </div>
+          <div id="mp-join-btn" class="small-btn">加入房间</div>
+        </div>
+      </div>
+      <div id="mp-status"></div>
+    </div>
+    <div class="controls-grid">
+      <div><b>WASD / 方向键</b><span>移动</span></div>
+      <div><b>鼠标</b><span>瞄准（自动开火）</span></div>
+      <div><b>SPACE / SHIFT</b><span>冲刺（无敌帧）</span></div>
+      <div><b>Q / 右键</b><span>超载冲击波</span></div>
+      <div><b>E</b><span>湮灭协议（碎片充能）</span></div>
+      <div><b>ESC / P · M</b><span>暂停 · 静音</span></div>
+    </div>
+    <div id="title-best"></div>
+  </div>
+</div>
+
+<!-- 联机大厅 -->
+<div id="lobby-screen" class="overlay hidden">
+  <div class="panel lobby-panel">
+    <div class="panel-title">集结大厅</div>
+    <div id="lobby-room-info">
+      <div class="lr-label">房间名（点击复制）</div>
+      <div id="lobby-room" class="lr-code">------</div>
+      <div class="lr-label">密码</div>
+      <div id="lobby-pass" class="lr-code lr-pass">----</div>
+      <div class="mp-hint">同一局域网的朋友打开本页面 → 组队联机 → 输入房名密码即可加入</div>
+    </div>
+    <div id="lobby-players"></div>
+    <div id="lobby-start-btn" class="big-btn hidden">开 战 [Enter]</div>
+    <div id="lobby-wait" class="mp-hint hidden">等待房主开战…</div>
+    <div id="lobby-quit-btn" class="small-btn">离开房间</div>
+  </div>
+</div>
+
+<!-- 倒地重生 -->
+<div id="respawn-overlay" class="hidden">
+  <div id="respawn-box">
+    <div id="respawn-title">你被击倒了</div>
+    <div id="respawn-count">10</div>
+    <div class="mp-hint">队友还在战斗 —— 马上重返战场</div>
+  </div>
+</div>
+
+<!-- 升级选卡 -->
+<div id="levelup-screen" class="overlay hidden">
+  <div id="levelup-title">⬡ 系统升级 ⬡</div>
+  <div id="levelup-sub">选择一项强化 &nbsp;<span class="key-hint">按 1 / 2 / 3 或点击</span></div>
+  <div id="cards"></div>
+</div>
+
+<!-- 暂停 -->
+<div id="pause-screen" class="overlay hidden">
+  <div class="panel">
+    <div class="panel-title">已暂停</div>
+    <div id="resume-btn" class="big-btn">继 续</div>
+    <div id="quit-btn" class="small-btn">返回主菜单</div>
+  </div>
+</div>
+
+<!-- 结算 -->
+<div id="gameover-screen" class="overlay hidden">
+  <div class="panel">
+    <div id="go-title">信号丢失</div>
+    <div id="go-new-best" class="hidden">★ 新纪录 ★</div>
+    <div id="go-stats"></div>
+    <div id="retry-btn" class="big-btn">再次出击 [R]</div>
+    <div id="menu-btn" class="small-btn">返回主菜单</div>
+  </div>
+</div>
+
+<div id="mute-icon" class="hidden">🔇</div>
+<div id="fps"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

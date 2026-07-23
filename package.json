@@ -1,0 +1,13 @@
+{
+  "name": "void-pulse",
+  "version": "1.0.0",
+  "description": "3D neon arena survivor web game",
+  "scripts": {
+    "start": "python3 -m http.server 8123"
+  },
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "puppeteer-core": "^25.3.0"
+  }
+}
