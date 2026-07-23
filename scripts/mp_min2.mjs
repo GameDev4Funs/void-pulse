@@ -14,7 +14,7 @@ async function mk(tag) {
   const p = await browser.newPage();
   p.on('pageerror', (e) => console.log(`[${tag} err]`, e.message.slice(0, 150)));
   p.on('console', (m) => { if (m.type() === 'error') console.log(`[${tag} console]`, m.text().slice(0, 150)); });
-  await p.goto('http://localhost:8123/index.html?lowfx=1&bench=1', { waitUntil: 'networkidle0' });
+  await p.goto('http://localhost:8123/index.html?lowfx=1&bench=1&ws=ws%3A%2F%2Flocalhost%3A8124', { waitUntil: 'networkidle0' });
   await sleep(1000);
   await p.evaluate(() => {
     window.__beats = 0;

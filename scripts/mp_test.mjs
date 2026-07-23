@@ -1,9 +1,10 @@
-// 联机端到端测试：建房 → 加入 → 开战 → 同步 → 伤害 → 拾取 → 倒地重生 → 团灭 → 满员限制
+// 联机端到端测试：同源服务 → 建房 → 加入 → 开战 → 同步 → 伤害 → 拾取 → 倒地重生 → 团灭 → 满员限制
 import { spawn } from 'child_process';
 import puppeteer from 'puppeteer-core';
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const URL = process.argv[2] || 'http://localhost:8123/index.html';
+const externalUrl = process.argv[2];
+const URL = externalUrl || 'http://localhost:8133/index.html';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const errors = [];
 let failed = 0;
@@ -12,8 +13,8 @@ const check = (name, cond) => {
   if (!cond) failed++;
 };
 
-// 启动本地中继
-const relay = spawn('python3', ['scripts/relay_server.py', '8124'], { stdio: 'pipe' });
+// 默认启动生产同构的单端口服务；传入 URL 时验证外部部署。
+const server = externalUrl ? null : spawn('python3', ['scripts/server.py', '8133'], { stdio: 'pipe' });
 await sleep(800);
 
 // 每个客户端独立浏览器实例（单页即前台标签，rAF 不被节流）
@@ -41,6 +42,7 @@ async function newPage(tag) {
   return page;
 }
 
+try {
 const A = await newPage('A');
 await jsClick(A, 'mp-btn');
 await jsClick(A, 'mp-create-btn');
@@ -143,6 +145,9 @@ check('房间上限 4 人', await A.evaluate(() => window.__DBG.game.mp.playerCo
 
 console.log('---- page errors:', errors.length);
 errors.slice(0, 10).forEach((e) => console.log(e));
-for (const b of browsers) await b.close().catch(() => {});
-relay.kill();
+} finally {
+  await Promise.all(browsers.map((browser) => browser.close().catch(() => {})));
+  if (server) server.kill();
+}
+
 process.exit(failed + (errors.length ? 1 : 0));

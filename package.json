@@ -3,7 +3,12 @@
   "version": "1.0.0",
   "description": "3D neon arena survivor web game",
   "scripts": {
-    "start": "python3 -m http.server 8123"
+    "start": "python3 scripts/server.py",
+    "test:mp": "node scripts/mp_test.mjs",
+    "test:mp:perf": "node scripts/mp_perf.mjs",
+    "test:net": "node scripts/net_url_test.mjs",
+    "test:relay": "python3 scripts/relay_queue_test.py",
+    "test:smoke": "node scripts/smoke.mjs"
   },
   "type": "module",
   "private": true,

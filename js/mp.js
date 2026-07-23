@@ -4,8 +4,8 @@ import { ENEMY_TYPES, PALETTE, ULT, PULSE } from './config.js';
 import { damp, dist2, rand } from './utils.js';
 
 const PEER_COLORS = [0xffd23e, 0x4dff88, 0xff8ad8, 0x9fd8ff];
-const SNAP_RATE = 0.1;    // 快照 10Hz
-const POS_RATE = 1 / 15;  // 位置 15Hz
+const SNAP_RATE = 0.125;  // 世界快照 8Hz；插值补足观感，降低多人带宽与序列化压力
+const POS_RATE = 1 / 12;  // 位置 12Hz
 
 // —— 队友战机（渲染 + 名牌，无本地逻辑）——
 class RemotePlayer {
@@ -215,10 +215,11 @@ export class MpSession {
     if (this.snapT <= 0) {
       this.snapT = SNAP_RATE;
       const en = [];
-      for (const e of g.enemies.list) {
+      for (let i = 0; i < g.enemies.list.length; i++) {
+        const e = g.enemies.list[i];
         if (!e.active || e.dying) continue;
         const flags = (e.elite ? 1 : 0) | (e.burnT > 0 ? 2 : 0) | (e.fuseT >= 0 ? 4 : 0);
-        en.push([g.enemies.list.indexOf(e), e.type, +e.pos.x.toFixed(1), +e.pos.z.toFixed(1), Math.max(0, Math.round((e.hp / e.maxHp) * 100)), flags]);
+        en.push([i, e.type, +e.pos.x.toFixed(1), +e.pos.z.toFixed(1), Math.max(0, Math.round((e.hp / e.maxHp) * 100)), flags]);
       }
       const gm = [];
       g.pickups.gems.forEach((q, i) => { if (q.active) gm.push([i, +q.pos.x.toFixed(1), +q.pos.z.toFixed(1)]); });

@@ -9,8 +9,10 @@ export function genPassword() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 export function defaultWsUrl() {
-  const host = location.hostname || 'localhost';
-  return `ws://${host}:8124`;
+  const override = new URLSearchParams(location.search).get('ws');
+  if (override) return override;
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${location.host}/ws`;
 }
 
 export class Net {

@@ -6,13 +6,14 @@ import socketserver
 import threading
 import hashlib
 import base64
+from collections import deque
 import json
 import struct
 import sys
-import time
 
 WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 MAX_MEMBERS = 4
+MAX_PENDING_FRAMES = 128
 
 rooms = {}            # name -> {'password': str, 'host': int, 'members': {id: Member}}
 rooms_lock = threading.Lock()
@@ -39,6 +40,10 @@ def http_read_headers(sock):
     return data.decode('latin1')
 
 
+def websocket_accept(key):
+    return base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+
+
 def ws_handshake(sock, raw):
     key = None
     for line in raw.split('\r\n'):
@@ -46,7 +51,7 @@ def ws_handshake(sock, raw):
             key = line.split(':', 1)[1].strip()
     if not key:
         return False
-    accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+    accept = websocket_accept(key)
     resp = ('HTTP/1.1 101 Switching Protocols\r\n'
             'Upgrade: websocket\r\n'
             'Connection: Upgrade\r\n'
@@ -99,26 +104,106 @@ class Member:
         self.id = mid
         self.name = name
         self.sock = sock
-        self.send_lock = threading.Lock()
         self.room = None
+        self.pending = deque()
+        self.pending_cond = threading.Condition()
+        self.closed = False
+        self.writer = threading.Thread(target=self._write_loop, daemon=True)
+        self.writer.start()
+
+    def _write_loop(self):
+        try:
+            while True:
+                with self.pending_cond:
+                    while not self.pending and not self.closed:
+                        self.pending_cond.wait()
+                    if self.closed and not self.pending:
+                        return
+                    _, frame = self.pending.popleft()
+                self.sock.sendall(frame)
+        except OSError:
+            with self.pending_cond:
+                self.closed = True
+                self.pending.clear()
+                self.pending_cond.notify_all()
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def send_frame(self, frame, replace_key=None):
+        """异步发送；高频状态帧只保留同类最新值，避免慢客户端拖垮房间。"""
+        disconnect = False
+        with self.pending_cond:
+            if self.closed:
+                return False
+            if replace_key is not None:
+                for i in range(len(self.pending) - 1, -1, -1):
+                    if self.pending[i][0] == replace_key:
+                        # 删除旧状态后从队尾重新排队，不能越过其间的生成/死亡等关键事件。
+                        del self.pending[i]
+                        break
+            if len(self.pending) >= MAX_PENDING_FRAMES:
+                for i, (key, _) in enumerate(self.pending):
+                    if key is not None:
+                        del self.pending[i]
+                        break
+                else:
+                    if replace_key is not None:
+                        # 队列全是关键事件时，宁可丢下一份会被后续覆盖的状态帧。
+                        return False
+                    # 关键事件也无法入队：断开慢客户端，避免静默丢事件后永久分叉。
+                    self.closed = True
+                    self.pending.clear()
+                    self.pending_cond.notify_all()
+                    disconnect = True
+            if not disconnect:
+                self.pending.append((replace_key, frame))
+                self.pending_cond.notify()
+                return True
+        if disconnect:
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        return False
 
     def send(self, obj):
-        try:
-            with self.send_lock:
-                self.sock.sendall(make_frame(1, json.dumps(obj, separators=(',', ':')).encode()))
-            return True
-        except OSError:
-            return False
+        return self.send_frame(encode_message(obj), replace_key_for(obj))
+
+    def stop_writer(self):
+        with self.pending_cond:
+            self.closed = True
+            self.pending.clear()
+            self.pending_cond.notify_all()
 
 
-def broadcast(room, obj, exclude=None):
-    for m in list(room['members'].values()):
-        if exclude is not None and m.id == exclude:
-            continue
-        m.send(obj)
+def encode_message(obj):
+    return make_frame(1, json.dumps(obj, separators=(',', ':')).encode())
+
+
+def replace_key_for(obj):
+    if obj.get('t') != 'msg':
+        return None
+    data = obj.get('data')
+    if not isinstance(data, dict):
+        return None
+    kind = data.get('k')
+    if kind in ('snap', 'p'):
+        return f"{obj.get('from', 0)}:{kind}"
+    return None
+
+
+def broadcast(members, obj):
+    frame = encode_message(obj)
+    replace_key = replace_key_for(obj)
+    for member in members:
+        member.send_frame(frame, replace_key)
 
 
 def remove_member(member):
+    recipients = []
+    notice = None
     with rooms_lock:
         room = rooms.get(member.room) if member.room else None
         if not room:
@@ -127,13 +212,17 @@ def remove_member(member):
         is_host = room['host'] == member.id
         if not room['members'] or is_host:
             # 房主离开 → 解散房间
-            for m in list(room['members'].values()):
-                m.send({'t': 'host_left'})
+            recipients = list(room['members'].values())
+            notice = {'t': 'host_left'}
+            for m in recipients:
                 m.room = None
             rooms.pop(member.room, None)
         else:
-            broadcast(room, {'t': 'peer_leave', 'id': member.id, 'name': member.name})
+            recipients = list(room['members'].values())
+            notice = {'t': 'peer_leave', 'id': member.id, 'name': member.name}
     member.room = None
+    if notice:
+        broadcast(recipients, notice)
 
 
 def handle_message(member, msg):
@@ -144,90 +233,102 @@ def handle_message(member, msg):
         if not room_name:
             member.send({'t': 'err', 'msg': '房间名无效'})
             return
+        error = None
         with rooms_lock:
             if room_name in rooms:
-                member.send({'t': 'err', 'msg': '房间名已存在，换一个'})
-                return
-            rooms[room_name] = {'password': password, 'host': member.id, 'members': {member.id: member}}
-            member.room = room_name
-        member.send({'t': 'created', 'room': room_name, 'id': member.id})
+                error = '房间名已存在，换一个'
+            else:
+                rooms[room_name] = {'password': password, 'host': member.id, 'members': {member.id: member}}
+                member.room = room_name
+        if error:
+            member.send({'t': 'err', 'msg': error})
+        else:
+            member.send({'t': 'created', 'room': room_name, 'id': member.id})
     elif t == 'join':
         room_name = str(msg.get('room', ''))[:24]
         password = str(msg.get('pass', ''))[:16]
+        error = None
+        peers = []
+        recipients = []
+        host_id = 0
         with rooms_lock:
             room = rooms.get(room_name)
             if not room:
-                member.send({'t': 'err', 'msg': '房间不存在'})
-                return
-            if room['password'] != password:
-                member.send({'t': 'err', 'msg': '密码错误'})
-                return
-            if len(room['members']) >= MAX_MEMBERS:
-                member.send({'t': 'err', 'msg': '房间已满（最多 4 人）'})
-                return
-            peers = [{'id': m.id, 'name': m.name} for m in room['members'].values()]
-            room['members'][member.id] = member
-            member.room = room_name
-            host_id = room['host']
-        member.send({'t': 'joined', 'room': room_name, 'id': member.id, 'host': host_id, 'peers': peers})
-        with rooms_lock:
-            room2 = rooms.get(room_name)
-            if room2:
-                broadcast(room2, {'t': 'peer_join', 'id': member.id, 'name': member.name}, exclude=member.id)
+                error = '房间不存在'
+            elif room['password'] != password:
+                error = '密码错误'
+            elif len(room['members']) >= MAX_MEMBERS:
+                error = '房间已满（最多 4 人）'
+            else:
+                peers = [{'id': m.id, 'name': m.name} for m in room['members'].values()]
+                recipients = list(room['members'].values())
+                room['members'][member.id] = member
+                member.room = room_name
+                host_id = room['host']
+        if error:
+            member.send({'t': 'err', 'msg': error})
+        else:
+            member.send({'t': 'joined', 'room': room_name, 'id': member.id, 'host': host_id, 'peers': peers})
+            broadcast(recipients, {'t': 'peer_join', 'id': member.id, 'name': member.name})
     elif t == 'msg':
+        recipients = []
         with rooms_lock:
             room = rooms.get(member.room) if member.room else None
             if room:
-                broadcast(room, {'t': 'msg', 'from': member.id, 'data': msg.get('data')}, exclude=member.id)
+                recipients = [m for m in room['members'].values() if m.id != member.id]
+        if recipients:
+            broadcast(recipients, {'t': 'msg', 'from': member.id, 'data': msg.get('data')})
+
+
+def serve_websocket(sock):
+    """在已完成 Upgrade 的 socket 上运行一个联机会话。"""
+    member = Member(gen_id(), '?', sock)
+    frag = b''
+    try:
+        while True:
+            opcode, payload = read_frame(sock)
+            if opcode == 8:   # close
+                member.send_frame(make_frame(8, b''))
+                break
+            if opcode == 9:   # ping → pong
+                member.send_frame(make_frame(10, payload))
+                continue
+            if opcode in (1, 2, 0):
+                frag += payload
+                if len(frag) > 262144:
+                    break
+                try:
+                    msg = json.loads(frag.decode())
+                    frag = b''
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if msg.get('t') == 'name':
+                    member.name = str(msg.get('name', '?'))[:16]
+                    continue
+                handle_message(member, msg)
+    except (ConnectionError, OSError):
+        pass
+    finally:
+        try:
+            remove_member(member)
+        except Exception:
+            pass
+        member.stop_writer()
+        try:
+            sock.close()
+        except OSError:
+            pass
 
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         sock = self.request
         sock.settimeout(300)
-        try:
-            raw = http_read_headers(sock)
-            if not raw or 'upgrade' not in raw.lower():
-                return
-            if not ws_handshake(sock, raw):
-                return
-            member = Member(gen_id(), '?', sock)
-            frag = b''
-            while True:
-                opcode, payload = read_frame(sock)
-                if opcode == 8:   # close
-                    try:
-                        sock.sendall(make_frame(8, b''))
-                    except OSError:
-                        pass
-                    break
-                if opcode == 9:   # ping → pong
-                    member.sock.sendall(make_frame(10, payload))
-                    continue
-                if opcode in (1, 2, 0):
-                    frag += payload
-                    if opcode != 0 and len(frag) > 262144:
-                        break
-                    try:
-                        msg = json.loads(frag.decode())
-                        frag = b''
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        continue
-                    if msg.get('t') == 'name':
-                        member.name = str(msg.get('name', '?'))[:16]
-                        continue
-                    handle_message(member, msg)
-        except (ConnectionError, OSError):
-            pass
-        finally:
-            try:
-                remove_member(member)
-            except Exception:
-                pass
-            try:
-                sock.close()
-            except OSError:
-                pass
+        raw = http_read_headers(sock)
+        if not raw or 'upgrade' not in raw.lower():
+            return
+        if ws_handshake(sock, raw):
+            serve_websocket(sock)
 
 
 class Server(socketserver.ThreadingTCPServer):

@@ -13,7 +13,7 @@ const browser = await puppeteer.launch({
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 page.on('console', (m) => { if (m.type() === 'error') console.log('[console]', m.text()); });
-await page.goto('http://localhost:8123/index.html?lowfx=1', { waitUntil: 'networkidle0' });
+await page.goto('http://localhost:8123/index.html?lowfx=1&ws=ws%3A%2F%2Flocalhost%3A8124', { waitUntil: 'networkidle0' });
 await sleep(1200);
 // 心跳探针
 await page.evaluate(() => {
