@@ -128,7 +128,11 @@ export class Enemies {
     for (const t of this.telegraphs) { t.active = false; t.mesh.visible = false; }
     for (const w of this.webZones) { w.active = false; w.mesh.visible = false; }
     this.chargeLine.visible = false;
-    this.spawnT = 2.2;               // 首次生成延迟
+    this.spawnT = DIRECTOR.firstSpawnDelay;
+    this.spawnBudget = 0;
+    this.pendingCount = 0;
+    this.spawnTargetCursor = 0;
+    this.lastSpawnAngle = rand(Math.PI * 2);
     this.bossAt = DIRECTOR.firstBossAt;
     this.bossActive = null;
     this.bossWarned = false;
@@ -156,17 +160,20 @@ export class Enemies {
   encircle() {
     const g = this.game;
     const p = g.randomAlivePlayerPos();
-    const n = Math.min(26, 10 + g.sector * 2);
+    const players = g.alivePlayerPositions();
+    const n = Math.min(20, 8 + Math.floor(g.sector * 1.5));
     const hunterOk = g.time >= ENEMY_TYPES.hunter.unlockAt;
     const speederOk = g.time >= ENEMY_TYPES.speeder.unlockAt;
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + rand(-0.1, 0.1);
-      const r = rand(9.5, 11);
-      const x = clamp(p.x + Math.cos(a) * r, -this.game.arena + 2, this.game.arena - 2);
-      const z = clamp(p.z + Math.sin(a) * r, -this.game.arena + 2, this.game.arena - 2);
+      const r = rand(16, 19);
+      const x = p.x + Math.cos(a) * r;
+      const z = p.z + Math.sin(a) * r;
+      if (!g.world.isSpawnClear(x, z, 0.9)) continue;
+      if (players.some((q) => dist2(x, z, q.x, q.z) < 12 * 12)) continue;
       const roll = Math.random();
       const type = hunterOk && roll < 0.3 ? 'hunter' : speederOk && roll < 0.55 ? 'speeder' : 'chaser';
-      this.queueSpawn(type, x, z, false, 1.15);
+      if (!this.queueSpawn(type, x, z, false, 1.15)) break;
     }
     g.ui.toast('⚠ 虫群包围 —— 突围！', '#ff5f7a');
     if (g.mpIsHost()) g.mp.evToast('⚠ 虫群包围 —— 突围！', '#ff5f7a');
@@ -192,25 +199,31 @@ export class Enemies {
       g.audio.bossWarn();
     }
     if (t >= this.bossAt && !this.bossActive) {
-      this.bossWarned = false;
-      g.ui.showBossBanner(false);
       const pp = g.randomAlivePlayerPos();
-      const a = rand(Math.PI * 2);
-      const px = clamp(pp.x + Math.cos(a) * 16, -this.game.arena + 6, this.game.arena - 6);
-      const pz = clamp(pp.z + Math.sin(a) * 16, -this.game.arena + 6, this.game.arena - 6);
-      this.queueSpawn('boss', px, pz, false, 1.8);
-      this.bossAt += DIRECTOR.bossEvery;
+      const pos = this.findSpawnPosition(pp, 'boss', 25, 34);
+      if (pos && this.queueSpawn('boss', pos.x, pos.z, false, 1.8)) {
+        this.bossWarned = false;
+        g.ui.showBossBanner(false);
+        this.bossAt += DIRECTOR.bossEvery;
+      } else {
+        // 满载时停止普通预算增长，为 Boss 腾出硬上限中的一个槽位。
+        this.spawnBudget = 0;
+      }
     }
 
-    // —— 普通生成 ——
-    const interval = Math.max(DIRECTOR.minInterval, DIRECTOR.startInterval * Math.pow(0.5, t / DIRECTOR.halfLife)) / g.mpSpawnRateScale();
-    const cap = Math.min(DIRECTOR.maxEnemiesCap, (DIRECTOR.maxEnemiesBase + t * DIRECTOR.maxEnemiesGrow) * g.mpCapScale());
-    this.spawnT -= dt * (this.bossActive ? 0.45 : 1);
-    if (this.spawnT <= 0 && this.activeCount < cap) {
-      this.spawnT = interval;
-      const batch = 1 + Math.floor(t / 80) + (Math.random() < 0.5 ? 1 : 0);
-      for (let i = 0; i < batch && this.activeCount < cap; i++) {
-        this.spawnOne(t);
+    // —— 普通生成：预算制波次，带推进 / 高潮 / 喘息，不再指数缩短间隔 ——
+    this.spawnT = Math.max(0, this.spawnT - dt);
+    const pace = this.paceAt(t);
+    if (this.spawnT <= 0) {
+      const bossMul = this.bossActive ? 0.55 : 1;
+      this.spawnBudget = Math.min(7, this.spawnBudget + dt * pace.rate * bossMul);
+      let room = Math.floor(pace.cap - this.activeCount - this.pendingCount);
+      let issued = 0;
+      while (this.spawnBudget >= 1 && room > 0 && issued < 3) {
+        if (!this.spawnOne(t)) break;
+        this.spawnBudget -= 1;
+        room--;
+        issued++;
       }
     }
 
@@ -221,6 +234,10 @@ export class Enemies {
       const f = tg.t / tg.dur;
       if (f >= 1) {
         tg.active = false; tg.mesh.visible = false;
+        if (tg.counted) {
+          this.pendingCount = Math.max(0, this.pendingCount - 1);
+          tg.counted = false;
+        }
         this.spawnNow(tg.type, tg.mesh.position.x, tg.mesh.position.z, tg.elite);
         continue;
       }
@@ -240,8 +257,37 @@ export class Enemies {
     }
   }
 
+  paceAt(t) {
+    const g = this.game;
+    const within = t % DIRECTOR.waveSeconds;
+    const phase = within >= DIRECTOR.respiteAt ? 'respite' : within >= DIRECTOR.surgeAt ? 'surge' : 'advance';
+    const phaseMul = phase === 'surge' ? 1.38 : phase === 'respite' ? 0.3 : 1;
+    const baseRate = Math.min(DIRECTOR.maxRate, DIRECTOR.baseRate + t * DIRECTOR.rateGrow);
+    const rate = baseRate * phaseMul * g.mpSpawnRateScale();
+    const cap = Math.min(
+      DIRECTOR.maxEnemiesCap,
+      (DIRECTOR.maxEnemiesBase + t * DIRECTOR.maxEnemiesGrow) * g.mpCapScale(),
+    );
+    return { phase, rate, cap };
+  }
+
+  spawnRoom() {
+    return Math.max(0, Math.floor(this.paceAt(this.game.time).cap) - this.activeCount - this.pendingCount);
+  }
+
   pickType(t) {
-    const avail = SPAWN_WEIGHTS.filter(([ty]) => ENEMY_TYPES[ty].unlockAt <= t);
+    const counts = new Map();
+    for (const e of this.list) {
+      if (e.active && !e.dying) counts.set(e.type, (counts.get(e.type) || 0) + 1);
+    }
+    const avail = SPAWN_WEIGHTS
+      .filter(([ty]) => ENEMY_TYPES[ty].unlockAt <= t)
+      .map(([ty, weight]) => {
+        const age = t - ENEMY_TYPES[ty].unlockAt;
+        const ramp = ty === 'chaser' ? 1 : clamp(0.2 + age / 42, 0.2, 1);
+        const crowded = (counts.get(ty) || 0) > Math.max(5, this.activeCount * 0.32) ? 0.32 : 1;
+        return [ty, weight * ramp * crowded];
+      });
     let total = 0;
     for (const [, w] of avail) total += w;
     let r = Math.random() * total;
@@ -252,43 +298,76 @@ export class Enemies {
   spawnOne(t) {
     const g = this.game;
     const type = this.pickType(t);
-    // 以随机存活玩家为目标点生成（联机分摊压力）
-    const p = g.randomAlivePlayerPos();
-    let x = 0, z = 0, ok = false;
-    // 40% 概率在玩家移动前方截杀（针对绕圈打法）
-    const pv = Math.hypot(p.vx, p.vz);
-    if (Math.random() < DIRECTOR.flankChance && pv > 3) {
-      const dx = p.vx / pv, dz = p.vz / pv;
-      for (let tries = 0; tries < 4 && !ok; tries++) {
-        const d = rand(15, 23);
-        const ja = rand(-0.7, 0.7);
-        const ca = Math.cos(ja), sa = Math.sin(ja);
-        x = clamp(p.x + (dx * ca - dz * sa) * d, -this.game.arena + 2, this.game.arena - 2);
-        z = clamp(p.z + (dx * sa + dz * ca) * d, -this.game.arena + 2, this.game.arena - 2);
-        ok = dist2(x, z, p.x, p.z) > 100;
-      }
+    // 玩家轮转而不是随机抽样，联机时压力更均匀。
+    const players = g.alivePlayerPositions();
+    if (!players.length) return false;
+    const p = players[this.spawnTargetCursor++ % players.length];
+    const pos = this.findSpawnPosition(p, type);
+    if (!pos) return false;
+    const eliteRamp = clamp((t - DIRECTOR.eliteAfter) / 120, 0, 1);
+    const elite = Math.random() < DIRECTOR.eliteChance * eliteRamp;
+    return this.queueSpawn(type, pos.x, pos.z, elite, DIRECTOR.telegraphTime);
+  }
+
+  findSpawnPosition(target, type, minDistance = DIRECTOR.spawnMinDistance, maxDistance = DIRECTOR.spawnMaxDistance) {
+    const g = this.game;
+    const players = g.alivePlayerPositions();
+    const pv = Math.hypot(target.vx || 0, target.vz || 0);
+    const useFlank = type !== 'boss' && Math.random() < DIRECTOR.flankChance && pv > 3;
+    const flankAngle = Math.atan2(target.vz || 0, target.vx || 0);
+    const golden = 2.399963;
+    let best = null;
+    for (let i = 0; i < 18; i++) {
+      const angle = useFlank && i < 5
+        ? flankAngle + rand(-0.65, 0.65)
+        : this.lastSpawnAngle + golden * (i + 1) + rand(-0.18, 0.18);
+      const distance = rand(minDistance, maxDistance);
+      const x = target.x + Math.cos(angle) * distance;
+      const z = target.z + Math.sin(angle) * distance;
+      if (!g.world.isSpawnClear(x, z, ENEMY_TYPES[type].radius)) continue;
+      let nearest = Infinity;
+      for (const p of players) nearest = Math.min(nearest, Math.sqrt(dist2(x, z, p.x, p.z)));
+      const safe = type === 'boss' ? 22 : DIRECTOR.spawnSafeDistance;
+      if (nearest < safe) continue;
+      const edgeRoom = Math.min(g.arena - Math.abs(x), g.arena - Math.abs(z));
+      const score = nearest + Math.min(edgeRoom, 12) * 0.25;
+      if (!best || score > best.score) best = { x, z, angle, score };
     }
-    // 常规：围绕玩家的环形生成
-    for (let tries = 0; tries < 6 && !ok; tries++) {
-      const a = rand(Math.PI * 2), d = rand(17, 27);
-      x = clamp(p.x + Math.cos(a) * d, -this.game.arena + 2, this.game.arena - 2);
-      z = clamp(p.z + Math.sin(a) * d, -this.game.arena + 2, this.game.arena - 2);
-      ok = dist2(x, z, p.x, p.z) > 100;
+    if (!best) return null;
+    this.lastSpawnAngle = best.angle;
+    return best;
+  }
+
+  findLocalSpawnPosition(origin, type, baseAngle, minDistance = 5, maxDistance = 8, safeDistance = 7) {
+    const g = this.game;
+    const players = g.alivePlayerPositions();
+    for (let i = 0; i < 7; i++) {
+      const angle = baseAngle + i * 0.9;
+      const distance = minDistance + (maxDistance - minDistance) * (i / 6);
+      const x = origin.x + Math.cos(angle) * distance;
+      const z = origin.z + Math.sin(angle) * distance;
+      if (!g.world.isSpawnClear(x, z, ENEMY_TYPES[type].radius)) continue;
+      if (players.some((p) => dist2(x, z, p.x, p.z) < safeDistance * safeDistance)) continue;
+      return { x, z };
     }
-    const elite = t > DIRECTOR.eliteAfter && Math.random() < DIRECTOR.eliteChance;
-    this.queueSpawn(type, x, z, elite, DIRECTOR.telegraphTime);
+    return null;
   }
 
   queueSpawn(type, x, z, elite, dur) {
     const g = this.game;
+    if (this.spawnRoom() <= 0) return false;
+    if (!g.world.isSpawnClear(x, z, ENEMY_TYPES[type].radius)) return false;
     if (g.mpIsHost()) g.mp.evTelegraph(type, x, z, elite, dur);
     const tg = this.telegraphs.find((q) => !q.active);
-    if (!tg) { this.spawnNow(type, x, z, elite); return; }
+    if (!tg) return !!this.spawnNow(type, x, z, elite);
+    this.pendingCount++;
     tg.active = true; tg.t = 0; tg.dur = dur;
+    tg.counted = true;
     tg.type = type; tg.elite = elite; tg.isBoss = type === 'boss';
     tg.mesh.position.set(x, 0.12, z);
     tg.mesh.material.color.setHex(type === 'boss' ? 0xff2266 : elite ? 0xffffff : 0xff3e6d);
     tg.mesh.visible = true;
+    return true;
   }
 
   // 客机：收到生成预警事件
@@ -296,6 +375,7 @@ export class Enemies {
     const tg = this.telegraphs.find((q) => !q.active);
     if (!tg) return;
     tg.active = true; tg.t = 0; tg.dur = dur;
+    tg.counted = false;
     tg.type = type; tg.elite = elite; tg.isBoss = type === 'boss';
     tg.mesh.position.set(x, 0.12, z);
     tg.mesh.material.color.setHex(type === 'boss' ? 0xff2266 : elite ? 0xffffff : 0xff3e6d);
@@ -327,20 +407,22 @@ export class Enemies {
   }
 
   spawnNow(type, x, z, elite) {
+    if (this.spawnRoom() <= 0) return null;
     const e = this.list.find((q) => !q.active && q.type === type);
     if (!e) return;
     const base = ENEMY_TYPES[type];
     const t = this.game.time;
     const mpHp = this.game.mpHpScale ? this.game.mpHpScale() : 1;
-    const hpMul = (type === 'boss' ? 1 + 0.65 * this.bossMark() : 1 + t / 78) * mpHp;
-    const spdMul = Math.min(1.45, 1 + t / 700);
+    const hpMul = (type === 'boss' ? 1 + 0.55 * this.bossMark() : Math.min(3.1, 1 + t / 155)) * mpHp;
+    const spdMul = Math.min(1.28, 1 + t / 1100);
+    const dmgMul = Math.min(1.42, 1 + t / 680);
     e.active = true; e.dying = false;
     e.generation++;
     e.pos.set(x, type === 'boss' ? 2.6 : 0.75, z);
     e.vel.set(0, 0, 0);
     e.maxHp = e.hp = Math.round(base.hp * hpMul * (elite ? 3.2 : 1));
     e.speed = base.speed * spdMul * (elite ? 1.12 : 1) * rand(0.92, 1.08);
-    e.dmg = Math.round(base.dmg * (elite ? 1.5 : 1));
+    e.dmg = Math.round(base.dmg * dmgMul * (elite ? 1.45 : 1));
     e.radius = base.radius * (elite ? 1.35 : 1);
     e.xp = base.xp * (elite ? 4 : 1);
     e.score = base.score * (elite ? 4 : 1);
@@ -360,6 +442,9 @@ export class Enemies {
     e.mesh.scale.setScalar(0.15);
     e.mat.emissive.setHex(elite ? 0xffffff : PALETTE[type]);
     e.mat.emissiveIntensity = elite ? 2.2 : type === 'shooter' ? 1.1 : 1.5;
+    this.game.world.resolveCircle(e.pos, e.radius, e.vel);
+    e.pos.x = clamp(e.pos.x, -this.game.arena + 0.3, this.game.arena - 0.3);
+    e.pos.z = clamp(e.pos.z, -this.game.arena + 0.3, this.game.arena - 0.3);
     if (type === 'boss') {
       this.bossActive = e;
       e.mark = this.bossMark();
@@ -385,7 +470,10 @@ export class Enemies {
       if (!b.active) continue;
       b.life -= dt;
       b.pos.addScaledVector(b.vel, dt);
-      if (b.life <= 0 || Math.abs(b.pos.x) > this.game.arena + 2 || Math.abs(b.pos.z) > this.game.arena + 2) {
+      if (b.life <= 0
+        || Math.abs(b.pos.x) > this.game.arena + 2
+        || Math.abs(b.pos.z) > this.game.arena + 2
+        || this.game.world.blocksProjectile(b.pos.x, b.pos.z, 0.22)) {
         b.active = false; b.mesh.visible = false;
         continue;
       }
@@ -463,6 +551,7 @@ export class Enemies {
       e.pos.z += e.vel.z * dt;
       e.pos.x = clamp(e.pos.x, -this.game.arena + 0.3, this.game.arena - 0.3);
       e.pos.z = clamp(e.pos.z, -this.game.arena + 0.3, this.game.arena - 0.3);
+      this.game.world.resolveCircle(e.pos, e.radius, e.vel);
 
       // 旋转/脉动动画（含受击挤压）
       if (e.type !== 'boss') {
@@ -484,14 +573,22 @@ export class Enemies {
 
     // 同类分离（防止完全重叠）
     this.separate(dt);
+    // 分离可能把实体重新推入掩体或围墙，最后统一稳定一次位置。
+    for (const e of this.list) {
+      if (!e.active) continue;
+      this.game.world.resolveCircle(e.pos, e.radius, e.vel);
+      e.pos.x = clamp(e.pos.x, -this.game.arena + 0.3, this.game.arena - 0.3);
+      e.pos.z = clamp(e.pos.z, -this.game.arena + 0.3, this.game.arena - 0.3);
+    }
   }
 
   seekPlayer(e, dt, mul) {
     const t = this.game.playerTarget(e.pos.x, e.pos.z);
     const dx = t.x - e.pos.x, dz = t.z - e.pos.z;
     const d = Math.hypot(dx, dz) || 1;
-    e.vel.x += (dx / d) * e.speed * mul * 3.2 * dt * 60 / 60;
-    e.vel.z += (dz / d) * e.speed * mul * 3.2 * dt;
+    const steer = this.game.world.steerAround(e.pos.x, e.pos.z, dx / d, dz / d, e.radius, e.netId);
+    e.vel.x += steer.x * e.speed * mul * 3.2 * dt;
+    e.vel.z += steer.z * e.speed * mul * 3.2 * dt;
     // 限速
     const v = Math.hypot(e.vel.x, e.vel.z);
     const maxV = e.speed * mul;
@@ -508,8 +605,9 @@ export class Enemies {
     if (d > base.keepMax) { mx = dx / d; mz = dz / d; }
     else if (d < base.keepMin) { mx = -dx / d; mz = -dz / d; }
     else { mx = -dz / d * 0.6; mz = dx / d * 0.6; }  // 环绕
-    e.vel.x += mx * e.speed * 3 * dt;
-    e.vel.z += mz * e.speed * 3 * dt;
+    const steer = g.world.steerAround(e.pos.x, e.pos.z, mx, mz, e.radius, e.netId);
+    e.vel.x += steer.x * e.speed * 3 * dt;
+    e.vel.z += steer.z * e.speed * 3 * dt;
     const v = Math.hypot(e.vel.x, e.vel.z);
     if (v > e.speed) { e.vel.x = e.vel.x / v * e.speed; e.vel.z = e.vel.z / v * e.speed; }
 
@@ -532,8 +630,9 @@ export class Enemies {
     const tz = t.z + t.vz * base.lead;
     const dx = tx - e.pos.x, dz = tz - e.pos.z;
     const d = Math.hypot(dx, dz) || 1;
-    e.vel.x += (dx / d) * e.speed * 3.4 * dt;
-    e.vel.z += (dz / d) * e.speed * 3.4 * dt;
+    const steer = this.game.world.steerAround(e.pos.x, e.pos.z, dx / d, dz / d, e.radius, e.netId);
+    e.vel.x += steer.x * e.speed * 3.4 * dt;
+    e.vel.z += steer.z * e.speed * 3.4 * dt;
     const v = Math.hypot(e.vel.x, e.vel.z);
     const maxV = e.speed;
     if (v > maxV) { e.vel.x = e.vel.x / v * maxV; e.vel.z = e.vel.z / v * maxV; }
@@ -550,8 +649,9 @@ export class Enemies {
     if (d > base.keepMax) { mx = dx / d; mz = dz / d; }
     else if (d < base.keepMin) { mx = -dx / d; mz = -dz / d; }
     else { mx = dz / d * 0.5; mz = -dx / d * 0.5; }
-    e.vel.x += mx * e.speed * 3 * dt;
-    e.vel.z += mz * e.speed * 3 * dt;
+    const steer = g.world.steerAround(e.pos.x, e.pos.z, mx, mz, e.radius, e.netId);
+    e.vel.x += steer.x * e.speed * 3 * dt;
+    e.vel.z += steer.z * e.speed * 3 * dt;
     const v = Math.hypot(e.vel.x, e.vel.z);
     if (v > e.speed) { e.vel.x = e.vel.x / v * e.speed; e.vel.z = e.vel.z / v * e.speed; }
     e.webT -= dt;
@@ -695,9 +795,9 @@ export class Enemies {
       const n = 3 + phase;
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2;
-        const sx = clamp(e.pos.x + Math.cos(a) * 5, -this.game.arena + 2, this.game.arena - 2);
-        const sz = clamp(e.pos.z + Math.sin(a) * 5, -this.game.arena + 2, this.game.arena - 2);
-        this.queueSpawn(phase >= 2 && i % 2 === 0 ? 'speeder' : 'chaser', sx, sz, false, 0.7);
+        const type = phase >= 2 && i % 2 === 0 ? 'speeder' : 'chaser';
+        const pos = this.findLocalSpawnPosition(e.pos, type, a);
+        if (pos) this.queueSpawn(type, pos.x, pos.z, false, 0.7);
       }
       e.flashT = 0.09;
       g.audio.nova();

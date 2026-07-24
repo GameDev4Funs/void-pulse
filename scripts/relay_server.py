@@ -249,6 +249,7 @@ def handle_message(member, msg):
                 rooms[room_name] = {
                     'password': password,
                     'version': version,
+                    'locked': False,
                     'host': member.id,
                     'members': {member.id: member},
                 }
@@ -273,6 +274,8 @@ def handle_message(member, msg):
                 error = '密码错误'
             elif room.get('version', 1) != version:
                 error = '游戏版本不一致，请刷新页面后重试'
+            elif room.get('locked', False):
+                error = '游戏已经开始，请等待房主返回大厅'
             elif len(room['members']) >= MAX_MEMBERS:
                 error = '房间已满（最多 4 人）'
             else:
@@ -281,11 +284,20 @@ def handle_message(member, msg):
                 room['members'][member.id] = member
                 member.room = room_name
                 host_id = room['host']
+                # 在房间锁内排队 joined/peer_join，保证随后的 lock 确认不会越过已接纳成员通知。
+                member.send({'t': 'joined', 'room': room_name, 'id': member.id, 'host': host_id, 'peers': peers})
+                broadcast(recipients, {'t': 'peer_join', 'id': member.id, 'name': member.name})
         if error:
             member.send({'t': 'err', 'msg': error})
-        else:
-            member.send({'t': 'joined', 'room': room_name, 'id': member.id, 'host': host_id, 'peers': peers})
-            broadcast(recipients, {'t': 'peer_join', 'id': member.id, 'name': member.name})
+    elif t in ('lock', 'unlock'):
+        locked = None
+        with rooms_lock:
+            room = rooms.get(member.room) if member.room else None
+            if room and room['host'] == member.id:
+                room['locked'] = t == 'lock'
+                locked = room['locked']
+        if locked is not None:
+            member.send({'t': 'room_lock', 'locked': locked})
     elif t == 'msg':
         recipients = []
         with rooms_lock:

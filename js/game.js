@@ -21,7 +21,7 @@ import { Net, genRoomCode, genPassword, defaultWsUrl } from './net.js';
 import { MpSession } from './mp.js';
 
 const CAM_OFFSET = new THREE.Vector3(0, 28.5, 15.5);
-const MP_ARENA = 64;
+const MP_ARENA = 80;
 const RESPAWN_TIME = 10;
 
 export class Game {
@@ -158,16 +158,19 @@ export class Game {
   setArena(size) {
     if (size === this.arena) return;
     this.arena = size;
-    if (this.world) this.scene.remove(this.world.root);
+    if (this.world) {
+      this.scene.remove(this.world.root);
+      this.world.dispose?.();
+    }
     this.world = buildWorld(this.scene, size);
   }
 
   mpIsHost() { return !!(this.mp && this.mp.isHost); }
   // 敌人生成/强度缩放（联机人越多越猛）
-  mpPlayerCount() { return this.mp ? this.mp.playerCount : 1; }
-  mpSpawnRateScale() { return this.mp ? 1 + 0.6 * (this.mp.playerCount - 1) : 1; }
-  mpCapScale() { return this.mp ? 1 + 0.55 * (this.mp.playerCount - 1) : 1; }
-  mpHpScale() { return this.mp ? 1 + 0.35 * (this.mp.playerCount - 1) : 1; }
+  mpPlayerCount() { return this.mp ? this.mp.participantCount : 1; }
+  mpSpawnRateScale() { return this.mp ? 1 + 0.25 * (this.mp.participantCount - 1) : 1; }
+  mpCapScale() { return this.mp ? 1 + 0.38 * (this.mp.participantCount - 1) : 1; }
+  mpHpScale() { return this.mp ? 1 + 0.2 * (this.mp.participantCount - 1) : 1; }
   mpSupplyEvery() { return this.mp ? 35 : 55; }
   mpSendFx(kind, data) { if (this.mp) this.mp.sendFx(kind, data); }
 
@@ -186,7 +189,7 @@ export class Game {
     return { x: bx, z: bz, vx: bvx, vz: bvz };
   }
 
-  randomAlivePlayerPos() {
+  alivePlayerPositions() {
     const list = [];
     const p = this.player;
     if (p.alive && !p.dead) list.push({ x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z });
@@ -195,8 +198,30 @@ export class Game {
         if (q.ready && !q.dead) list.push({ x: q.x, z: q.z, vx: q.vx || 0, vz: q.vz || 0 });
       }
     }
+    return list;
+  }
+
+  randomAlivePlayerPos() {
+    const list = this.alivePlayerPositions();
     if (list.length === 0) return { x: 0, z: 0, vx: 0, vz: 0 };
     return list[Math.floor(Math.random() * list.length)];
+  }
+
+  findSupplyPosition(target) {
+    const golden = 2.399963;
+    const base = rand(Math.PI * 2);
+    for (let i = 0; i < 18; i++) {
+      const a = base + i * golden;
+      const d = rand(8, 17);
+      const x = target.x + Math.cos(a) * d;
+      const z = target.z + Math.sin(a) * d;
+      if (this.world.isSpawnClear(x, z, 1.7)) return { x, z };
+    }
+    return null;
+  }
+
+  arenaHazardFactorAt(x, z) {
+    return this.world.hazardAt(x, z) ? 0.68 : 1;
   }
 
   getPickupPlayers() {
@@ -255,21 +280,29 @@ export class Game {
   }
 
   // 房主点击开始
-  mpBegin() {
-    if (!this.mpIsHost()) return;
+  async mpBegin() {
+    if (!this.mpIsHost() || this._mpBeginPending) return;
+    this._mpBeginPending = true;
+    const locked = await this.net.lockRoom(true);
+    this._mpBeginPending = false;
+    if (!locked || !this.mpIsHost() || this.state !== 'lobby') {
+      if (!locked) this.ui.toast('房间锁定失败，请重试', '#ff6b81');
+      return;
+    }
     this.mp.send({ k: 'begin' });
     this.startMp();
   }
 
   // 收到 begin（或房主自己）→ 开局
   startMp() {
+    this.mp.markRunParticipants();
     this.setArena(MP_ARENA);
     this.resetRun();
     this.state = 'playing';
     this.ui.showHud();
     this.ui.hideLobby();
     this.audio.init(); this.audio.resume();
-    this.ui.toast(`⚔ ${this.mp.playerCount} 人小队出击！`, '#4dff88');
+    this.ui.toast(`⚔ ${this.mp.participantCount} 人小队出击！`, '#4dff88');
   }
 
   // 联机团灭（主机广播或本地判定）
@@ -287,6 +320,7 @@ export class Game {
   quitToLobby() {
     this.resetRun();
     this.state = 'lobby';
+    if (this.mpIsHost()) void this.net.lockRoom(false);
     this.ui.showLobby(this.mpIsHost(), this.mp.room, null, this.mp.roster());
   }
 
@@ -294,7 +328,7 @@ export class Game {
     if (!this.mpIsHost()) return;
     const p = this.player;
     if (p.alive && !p.dead) return;
-    for (const q of this.mp.peers.values()) if (!q.dead) return;
+    for (const q of this.mp.peers.values()) if (q.participant && !q.dead) return;
     // 团灭
     const score = Math.floor(this.score);
     const isBest = score > this.best;
@@ -325,6 +359,8 @@ export class Game {
     this.chain = 0; this.chainT = 0;
     this.chainWindow = CHAIN.window; this.chainScoreMul = 1;
     this.zoneSlowFactor = 1;
+    this.arenaEventSeen = -1;
+    this.arenaHazardDamageT = 0.35;
     this.supplyAt = SUPPLY.firstAt;
     this.routes = { pyro: 0, volt: 0, void: 0 };
     this.routeTiers = { pyro: 0, volt: 0, void: 0 };
@@ -840,7 +876,7 @@ export class Game {
       this.ultBeam.rotation.y += rawDt * 6;
       if (this.ultBeamT <= 0) this.ultBeam.visible = false;
     }
-    this.world.update(this.state === 'paused' || this.state === 'levelup' ? 0 : dt);
+    this.world.update(this.state === 'paused' || this.state === 'levelup' ? 0 : dt, this.time);
     if (!this.bench) this.composer.render();
     this.input.endFrame();
   }
@@ -870,20 +906,22 @@ export class Game {
     }
     this.audio.intensity = clamp(0.25 + this.time / 240 + (this.enemies.bossActive ? 0.3 : 0), 0, 1);
 
-    // 蛛网减速
-    this.zoneSlowFactor = this.enemies.slowFactorAt(p.pos.x, p.pos.z);
+    // 蛛网与场地放电都会影响走位；放电按主客机共享的游戏时钟确定。
+    const inArenaHazard = this.world.hazardAt(p.pos.x, p.pos.z);
+    this.zoneSlowFactor = this.enemies.slowFactorAt(p.pos.x, p.pos.z) * this.arenaHazardFactorAt(p.pos.x, p.pos.z);
+    this.updateArenaHazard(dt, inArenaHazard);
 
     // 空投补给（主机/单机）
     if (!isGuest && this.time >= this.supplyAt) {
       this.supplyAt += this.mpSupplyEvery();
       const pp = this.randomAlivePlayerPos();
-      const a = rand(Math.PI * 2), d = rand(8, 16);
-      const sx = clamp(pp.x + Math.cos(a) * d, -this.arena + 3, this.arena - 3);
-      const sz = clamp(pp.z + Math.sin(a) * d, -this.arena + 3, this.arena - 3);
-      this.pickups.spawnSupply(sx, sz);
-      this.ui.toast('📦 补给舱已投放', '#ffd23e');
-      if (this.mpIsHost()) this.mp.evToast('📦 补给舱已投放', '#ffd23e');
-      this.audio.supply();
+      const supply = this.findSupplyPosition(pp);
+      if (supply) {
+        this.pickups.spawnSupply(supply.x, supply.z);
+        this.ui.toast('📦 补给舱已投放', '#ffd23e');
+        if (this.mpIsHost()) this.mp.evToast('📦 补给舱已投放', '#ffd23e');
+        this.audio.supply();
+      }
     }
 
     // 雷神（雷霆 III）：每 5s 轰击最密集敌群
@@ -975,6 +1013,29 @@ export class Game {
       this.mp.hostTick(dt);
       this.mp.hostTickPeers(dt);
       this.hostCheckWipe();
+    }
+  }
+
+  updateArenaHazard(dt, inside) {
+    const info = this.world.hazardInfo;
+    if (info.phase === 'warning' && info.cycle !== this.arenaEventSeen) {
+      this.arenaEventSeen = info.cycle;
+      this.ui.toast('⚠ 能源通道即将放电 —— 离开红色区域', '#ffb13e');
+      this.audio.bossWarn();
+    }
+    if (info.phase !== 'active' || !inside || !this.player.alive || this.player.dead) {
+      this.arenaHazardDamageT = Math.min(this.arenaHazardDamageT, 0.35);
+      return;
+    }
+    this.arenaHazardDamageT -= dt;
+    if (this.arenaHazardDamageT > 0) return;
+    this.arenaHazardDamageT = 0.72;
+    const p = this.player;
+    const dealt = p.takeDamage(7, this);
+    if (dealt === 'shield') this.onShieldBreak();
+    else if (dealt !== false) {
+      this.onPlayerHurt(dealt, p.pos.x, p.pos.z);
+      this.particles.burst(p.pos.x, 0.5, p.pos.z, 8, 0xff355d, { speed: 5, life: 0.35, size: 0.5 });
     }
   }
 

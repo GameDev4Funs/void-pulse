@@ -68,12 +68,27 @@ class RelayQueueTest(unittest.TestCase):
     def test_room_rejects_mismatched_protocol_version(self):
         host = RecorderMember(1, 'host')
         old_guest = RecorderMember(2, 'old')
-        handle_message(host, {'t': 'create', 'room': 'VERSION-ROOM', 'pass': '1234', 'v': 2})
-        handle_message(old_guest, {'t': 'join', 'room': 'VERSION-ROOM', 'pass': '1234', 'v': 1})
+        handle_message(host, {'t': 'create', 'room': 'VERSION-ROOM', 'pass': '1234', 'v': 3})
+        handle_message(old_guest, {'t': 'join', 'room': 'VERSION-ROOM', 'pass': '1234', 'v': 2})
 
         self.assertIsNone(old_guest.room)
         self.assertEqual(old_guest.sent[-1]['t'], 'err')
         self.assertIn('版本不一致', old_guest.sent[-1]['msg'])
+
+    def test_room_rejects_join_while_game_is_locked(self):
+        host = RecorderMember(1, 'host')
+        late_guest = RecorderMember(2, 'late')
+        handle_message(host, {'t': 'create', 'room': 'LOCKED-ROOM', 'pass': '1234', 'v': 3})
+        handle_message(host, {'t': 'lock'})
+        handle_message(late_guest, {'t': 'join', 'room': 'LOCKED-ROOM', 'pass': '1234', 'v': 3})
+
+        self.assertIsNone(late_guest.room)
+        self.assertEqual(late_guest.sent[-1]['t'], 'err')
+        self.assertIn('已经开始', late_guest.sent[-1]['msg'])
+
+        handle_message(host, {'t': 'unlock'})
+        handle_message(late_guest, {'t': 'join', 'room': 'LOCKED-ROOM', 'pass': '1234', 'v': 3})
+        self.assertEqual(late_guest.room, 'LOCKED-ROOM')
 
     def test_replaced_snapshot_moves_after_intervening_event(self):
         sock = SlowSocket()

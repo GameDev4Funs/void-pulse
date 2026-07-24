@@ -1,6 +1,6 @@
 // ============ 网络层：WebSocket 房间客户端 ============
 const WORDS = ['NEBULA', 'PULSAR', 'QUASAR', 'NOVA', 'ORION', 'VEGA', 'LYRA', 'CYGNUS', 'DRACO', 'PHOENIX', 'ANDROMEDA', 'COSMOS', 'AURORA', 'ZENITH', 'ECLIPSE', 'STELLAR'];
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export function genRoomCode() {
   const w = WORDS[Math.floor(Math.random() * WORDS.length)];
@@ -73,6 +73,13 @@ export class Net {
       case 'host_left':
         this.emit('host_left');
         break;
+      case 'room_lock':
+        if (this._lockWait && this._lockWait.locked === !!msg.locked) {
+          clearTimeout(this._lockWait.timer);
+          this._lockWait.resolve(true);
+          this._lockWait = null;
+        }
+        break;
     }
   }
 
@@ -88,6 +95,22 @@ export class Net {
     this._send({ t: 'join', room, pass, v: PROTOCOL_VERSION });
   }
 
+  lockRoom(locked) {
+    this._send({ t: locked ? 'lock' : 'unlock' });
+    return new Promise((resolve) => {
+      if (this._lockWait) {
+        clearTimeout(this._lockWait.timer);
+        this._lockWait.resolve(false);
+      }
+      const timer = setTimeout(() => {
+        if (!this._lockWait || this._lockWait.timer !== timer) return;
+        this._lockWait = null;
+        resolve(false);
+      }, 2500);
+      this._lockWait = { locked: !!locked, resolve, timer };
+    });
+  }
+
   send(data) {
     this._send({ t: 'msg', data });
   }
@@ -97,6 +120,11 @@ export class Net {
   }
 
   close() {
+    if (this._lockWait) {
+      clearTimeout(this._lockWait.timer);
+      this._lockWait.resolve(false);
+      this._lockWait = null;
+    }
     try { this.ws && this.ws.close(); } catch {}
   }
 }

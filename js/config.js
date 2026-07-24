@@ -50,20 +50,27 @@ export const PLAYER = {
 
 // —— 敌人生成导演 ——
 export const DIRECTOR = {
-  startInterval: 1.3,
-  minInterval: 0.28,
-  halfLife: 75,           // 间隔每 N 秒减半
-  maxEnemiesBase: 55,     // t=0 时的场上上限
-  maxEnemiesGrow: 0.7,    // 每秒增长
-  maxEnemiesCap: 260,
-  firstBossAt: 150,
-  bossEvery: 150,
-  eliteAfter: 240,
-  eliteChance: 0.1,
-  telegraphTime: 0.8,
-  flankChance: 0.4,       // 在玩家移动方向前方截杀的概率
-  encircleFirst: 90,      // 首次虫群包围
-  encircleEvery: 48,
+  firstSpawnDelay: 2.4,
+  baseRate: 0.78,         // 每秒累积的基础生成预算
+  rateGrow: 0.009,        // 随时间平滑增加，而不是指数失控
+  maxRate: 3.4,
+  waveSeconds: 36,        // 22s 推进 + 7s 高潮 + 7s 喘息
+  surgeAt: 22,
+  respiteAt: 29,
+  maxEnemiesBase: 30,
+  maxEnemiesGrow: 0.42,
+  maxEnemiesCap: 225,
+  firstBossAt: 180,
+  bossEvery: 165,
+  eliteAfter: 150,
+  eliteChance: 0.14,
+  telegraphTime: 0.95,
+  flankChance: 0.28,      // 少量截杀，避免持续在玩家正前方刷怪
+  spawnMinDistance: 19,
+  spawnMaxDistance: 29,
+  spawnSafeDistance: 15,  // 与所有存活玩家保持的最低距离
+  encircleFirst: 72,
+  encircleEvery: 84,
 };
 
 // —— 连锁击杀 ——
@@ -110,17 +117,17 @@ export const ULT = {
 
 export const ENEMY_TYPES = {
   chaser:   { hp: 22,  speed: 5.4,  dmg: 12, radius: 0.8,  xp: 1, score: 10, knockRes: 0,    unlockAt: 0 },
-  speeder:  { hp: 10,  speed: 9.6,  dmg: 8,  radius: 0.52, xp: 1, score: 12, knockRes: 0,    unlockAt: 35 },
-  splitter: { hp: 34,  speed: 4.4,  dmg: 10, radius: 0.95, xp: 2, score: 18, knockRes: 0.2,  unlockAt: 80 },
-  shooter:  { hp: 30,  speed: 4.6,  dmg: 9,  radius: 0.8,  xp: 2, score: 20, knockRes: 0.1,  unlockAt: 125,
+  speeder:  { hp: 10,  speed: 9.6,  dmg: 8,  radius: 0.52, xp: 1, score: 12, knockRes: 0,    unlockAt: 25 },
+  splitter: { hp: 34,  speed: 4.4,  dmg: 10, radius: 0.95, xp: 2, score: 18, knockRes: 0.2,  unlockAt: 55 },
+  shooter:  { hp: 30,  speed: 4.6,  dmg: 9,  radius: 0.8,  xp: 2, score: 20, knockRes: 0.1,  unlockAt: 78,
               keepMin: 10, keepMax: 16, fireCd: 2.6, bulletSpeed: 15 },
-  tank:     { hp: 135, speed: 2.7,  dmg: 20, radius: 1.6,  xp: 5, score: 40, knockRes: 0.85, unlockAt: 165 },
+  tank:     { hp: 135, speed: 2.7,  dmg: 20, radius: 1.6,  xp: 5, score: 40, knockRes: 0.85, unlockAt: 125 },
   mini:     { hp: 9,   speed: 7.6,  dmg: 6,  radius: 0.42, xp: 1, score: 5,  knockRes: 0,    unlockAt: 1e9 },
   // —— 第二批敌人 ——
-  bomber:   { hp: 14,  speed: 10.5, dmg: 0,  radius: 0.5,  xp: 2, score: 16, knockRes: 0,    unlockAt: 140,
+  bomber:   { hp: 14,  speed: 10.5, dmg: 0,  radius: 0.5,  xp: 2, score: 16, knockRes: 0,    unlockAt: 96,
               fuseTime: 0.6, blastR: 3.2, blastDmg: 26 },
-  hunter:   { hp: 45,  speed: 8.2,  dmg: 14, radius: 0.7,  xp: 2, score: 24, knockRes: 0.2,  unlockAt: 200, lead: 0.45 },
-  weaver:   { hp: 60,  speed: 3.9,  dmg: 10, radius: 0.85, xp: 3, score: 30, knockRes: 0.3,  unlockAt: 240,
+  hunter:   { hp: 45,  speed: 8.2,  dmg: 14, radius: 0.7,  xp: 2, score: 24, knockRes: 0.2,  unlockAt: 148, lead: 0.45 },
+  weaver:   { hp: 60,  speed: 3.9,  dmg: 10, radius: 0.85, xp: 3, score: 30, knockRes: 0.3,  unlockAt: 175,
               keepMin: 8, keepMax: 14, webCd: 3.5 },
   boss:     { hp: 2400, speed: 3.4, dmg: 26, radius: 2.6,  xp: 40, score: 1200, knockRes: 1, unlockAt: 1e9 },
 };

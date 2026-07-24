@@ -67,19 +67,126 @@ await jsClick(A, 'lobby-start-btn');
 await sleep(1500);
 check('房主进入战斗', await A.evaluate(() => window.__DBG.state() === 'playing'));
 check('客机进入战斗', await B.evaluate(() => window.__DBG.state() === 'playing'));
-check('联机大地图扩大到 128×128', await A.evaluate(() => window.__DBG.game.arena === 64));
+
+// 进行中的房间必须锁定；中途加入者没有完整世界状态，不能进入本局。
+const Late = await newPage('Late');
+await jsClick(Late, 'mp-btn');
+await Late.type('#mp-room', room);
+await Late.type('#mp-pass', pass);
+await jsClick(Late, 'mp-join-btn');
+await sleep(700);
+check('开局后中途加入被拒绝', await Late.evaluate(() => (
+  window.__DBG.state() === 'title'
+  && document.getElementById('mp-status').textContent.includes('已经开始')
+)));
+check('中途加入不会改变本局参战人数', await A.evaluate(() => (
+  window.__DBG.game.mp.playerCount === 2
+  && window.__DBG.game.mp.participantCount === 2
+)));
+
+check('联机能源设施扩大到 160×160', await A.evaluate(() => window.__DBG.game.arena === 80));
+check('场景包含八个可碰撞战术掩体', await A.evaluate(() => {
+  const world = window.__DBG.game.world;
+  const roundBarriers = world.coverMeshes.slice(4).every((mesh) => mesh.userData.collisionRadius === 3);
+  return world.colliders.length === 8 && world.coverMeshes.length === 8 && roundBarriers;
+}));
+check('玩家不能冲刺穿过设施掩体', await A.evaluate(() => {
+  const g = window.__DBG.game;
+  const p = g.player;
+  const c = g.world.colliders[0];
+  p.pos.set(c.x - c.r - p.radius - 0.18, 0.75, c.z);
+  p.vel.set(0, 0, 0);
+  p.dashDir.set(1, 0, 0);
+  p.dashT = 0.19;
+  const fakeInput = {
+    moveVec: () => ({ x: 1, z: 0, active: true }),
+    justPressed: () => false,
+  };
+  for (let i = 0; i < 6; i++) p.update(0.04, fakeInput, g);
+  const blocked = p.pos.x <= c.x - c.r - p.radius + 0.04;
+  p.pos.set(0, 0.75, 6);
+  p.vel.set(0, 0, 0);
+  p.dashT = 0;
+  return blocked;
+}));
+check('能源放电按预警与激活阶段切换', await A.evaluate(() => {
+  const g = window.__DBG.game;
+  const p = g.player;
+  g.world.update(0, 76);
+  const warning = g.world.hazardInfo.phase === 'warning';
+  g.world.update(0, 81);
+  const active = g.world.hazardInfo.phase === 'active'
+    && g.arenaHazardFactorAt(21, 0) === 0.68;
+  const savedHp = p.stats.hp;
+  const savedIFrames = p.iFrames;
+  p.stats.hp = p.stats.maxHp;
+  p.iFrames = 0;
+  g.arenaHazardDamageT = 0;
+  g.updateArenaHazard(0.1, true);
+  const damaged = p.stats.hp < p.stats.maxHp;
+  p.stats.hp = savedHp;
+  p.iFrames = savedIFrames;
+  g.arenaHazardDamageT = 0.35;
+  g.world.update(0, g.time);
+  return warning && active && damaged;
+}));
+check('敌人导演包含推进、高潮和喘息节奏', await A.evaluate(() => {
+  const d = window.__DBG.game.enemies;
+  const advance = d.paceAt(10);
+  const surge = d.paceAt(24);
+  const respite = d.paceAt(32);
+  return advance.phase === 'advance'
+    && surge.phase === 'surge'
+    && respite.phase === 'respite'
+    && surge.rate > advance.rate
+    && respite.rate < advance.rate;
+}));
+check('敌人出生点避开玩家、墙体与掩体', await A.evaluate(() => {
+  const g = window.__DBG.game;
+  const players = g.alivePlayerPositions();
+  for (let i = 0; i < 20; i++) {
+    const pos = g.enemies.findSpawnPosition(players[i % players.length], 'chaser');
+    if (!pos || !g.world.isSpawnClear(pos.x, pos.z, 0.8)) return false;
+    if (players.some((p) => Math.hypot(pos.x - p.x, pos.z - p.z) < 15)) return false;
+  }
+  return true;
+}));
+check('所有生成入口共享同一敌人硬上限', await A.evaluate(() => {
+  const d = window.__DBG.game.enemies;
+  const savedActive = d.activeCount;
+  const savedPending = d.pendingCount;
+  const telegraphs = d.telegraphs.filter((tg) => tg.active).length;
+  d.activeCount = Math.floor(d.paceAt(window.__DBG.game.time).cap);
+  d.pendingCount = 0;
+  const queued = d.queueSpawn('chaser', 60, 60, false, 1);
+  const direct = d.spawnNow('mini', 60, 60, false);
+  const unchanged = d.telegraphs.filter((tg) => tg.active).length === telegraphs;
+  d.activeCount = savedActive;
+  d.pendingCount = savedPending;
+  return queued === false && direct === null && unchanged;
+}));
+check('补给舱落点不会被设施掩体挡住', await A.evaluate(() => {
+  const g = window.__DBG.game;
+  const c = g.world.colliders[0];
+  if (g.world.isSpawnClear(c.x, c.z, 1.7)) return false;
+  for (let i = 0; i < 20; i++) {
+    const supply = g.findSupplyPosition({ x: c.x, z: c.z });
+    if (!supply || !g.world.isSpawnClear(supply.x, supply.z, 1.7)) return false;
+  }
+  return true;
+}));
 
 // 回归：联机视觉围墙和玩家实际碰撞必须使用同一个动态边界。
 await A.evaluate(() => {
   const g = window.__DBG.game;
-  g.player.pos.x = 50;
-  g.player.pos.z = 50;
+  g.player.pos.x = 66;
+  g.player.pos.z = 66;
   g.player.vel.set(0, 0, 0);
 });
 await sleep(150);
 check('联机内场不再存在 34 单元空气墙', await A.evaluate(() => {
   const p = window.__DBG.game.player.pos;
-  return p.x > 49 && p.z > 49;
+  return p.x > 65 && p.z > 65;
 }));
 await A.evaluate(() => {
   const g = window.__DBG.game;
@@ -103,6 +210,15 @@ check('墙边远端预测不会穿出围墙', await B.evaluate(() => {
   const edge = g.arena - 0.4;
   return peer && Math.abs(peer.remote.mesh.position.x) <= edge + 0.01
     && Math.abs(peer.remote.mesh.position.z) <= edge + 0.01;
+}));
+check('远端玩家外推不会穿进设施掩体', await B.evaluate(() => {
+  const g = window.__DBG.game;
+  const peer = [...g.mp.peers.values()][0];
+  const c = g.world.colliders[0];
+  peer.remote.setNetworkState(c.x - c.r - 0.8, c.z, 24, 0, 0);
+  peer.remote.update(0.12, g.camera);
+  return Math.hypot(peer.remote.mesh.position.x - c.x, peer.remote.mesh.position.z - c.z)
+    >= c.r + g.player.radius - 0.02;
 }));
 await A.evaluate(() => {
   const g = window.__DBG.game;
@@ -191,6 +307,20 @@ await B.mouse.move(500, 500);
 await sleep(4000);
 check('客机伤害事件到达主机', await A.evaluate(() => window.__dmgCount > 0));
 check('客机看到敌人(快照)', await B.evaluate(() => window.__DBG.game.enemies.list.some((e) => e.active)));
+check('客机敌人外推不会穿进设施掩体', await B.evaluate(() => {
+  const g = window.__DBG.game;
+  const e = g.enemies.list.find((enemy) => enemy.active);
+  const c = g.world.colliders[0];
+  if (!e) return false;
+  e.pos.set(c.x - c.r - e.radius - 0.1, e.pos.y, c.z);
+  e.netX = c.x;
+  e.netZ = c.z;
+  e.netVX = 24;
+  e.netVZ = 0;
+  e.netAge = 0;
+  g.mp.guestTick(0.12);
+  return Math.hypot(e.pos.x - c.x, e.pos.z - c.z) >= c.r + e.radius - 0.02;
+}));
 check('过期代际伤害不会串到复用池位', await A.evaluate(() => {
   const g = window.__DBG.game;
   const e = g.enemies.list.find((enemy) => enemy.active && !enemy.dying && enemy.hp > 2);

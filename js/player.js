@@ -193,6 +193,8 @@ export class Player {
     // 撞墙后清除朝墙外的速度，避免网络预测把队友模型外推到墙外。
     if (this.pos.x !== nextX) this.vel.x = 0;
     if (this.pos.z !== nextZ) this.vel.z = 0;
+    // 设施掩体为圆形碰撞体；同时剔除朝掩体内部的速度，冲刺也不会穿柱。
+    game.world.resolveCircle(this.pos, this.radius, this.vel);
 
     // —— 朝向瞄准点 ——
     const dx = this.aimPoint.x - this.pos.x, dz = this.aimPoint.z - this.pos.z;

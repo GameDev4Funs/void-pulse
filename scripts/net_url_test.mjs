@@ -1,5 +1,9 @@
 import { defaultWsUrl, Net, PROTOCOL_VERSION } from '../js/net.js';
 
+if (PROTOCOL_VERSION !== 3) {
+  throw new Error('场景碰撞与敌人导演变更后必须使用联机协议 v3');
+}
+
 globalThis.location = {
   protocol: 'http:',
   host: '127.0.0.1:8123',

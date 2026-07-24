@@ -1,6 +1,6 @@
 // ============ 联机会话：主机权威 + 客机插值 ============
 import * as THREE from 'three';
-import { ENEMY_TYPES, PALETTE, ULT, PULSE, WALL_PAD } from './config.js';
+import { ENEMY_TYPES, PALETTE, ULT, PULSE, WALL_PAD, PLAYER } from './config.js';
 import { clamp, damp, dist2, rand } from './utils.js';
 
 const PEER_COLORS = [0xffd23e, 0x4dff88, 0xff8ad8, 0x9fd8ff];
@@ -57,6 +57,7 @@ class RemotePlayer {
     const predictedZ = clamp(this.tz + this.vz * lead, -edge, edge);
     this.mesh.position.x = damp(this.mesh.position.x, predictedX, 18, dt);
     this.mesh.position.z = damp(this.mesh.position.z, predictedZ, 18, dt);
+    this.game.world.resolveCircle(this.mesh.position, PLAYER.radius);
     this.mesh.position.y = 0.75;
     this.mesh.rotation.y = damp(this.mesh.rotation.y, this.yaw, 10, dt);
     // 名牌投影
@@ -175,7 +176,9 @@ export class MpSession {
     const slot = this.peers.size;
     this.peers.set(id, {
       id, name, slot, x: 0, z: 0, ax: 0, az: -1, hp: 100, maxHp: 100, lv: 1, magnet: 3,
-      dead: false, ready: false, remote: new RemotePlayer(this.game.scene, this.game, name, slot),
+      // relay 在 begin 前完成锁房确认，因此所有成功 peer_join 的成员都属于本局。
+      dead: false, ready: false, participant: true,
+      remote: new RemotePlayer(this.game.scene, this.game, name, slot),
     });
   }
 
@@ -191,6 +194,15 @@ export class MpSession {
   }
 
   get playerCount() { return 1 + this.peers.size; }
+  get participantCount() {
+    let count = 1;
+    for (const p of this.peers.values()) if (p.participant) count++;
+    return count;
+  }
+
+  markRunParticipants() {
+    for (const p of this.peers.values()) p.participant = true;
+  }
 
   resetRunState() {
     this.snapT = 0;
@@ -477,6 +489,7 @@ export class MpSession {
         e.netAge = Math.min((e.netAge || 0) + dt, MAX_EXTRAPOLATION);
         e.pos.x = damp(e.pos.x, e.netX + (e.netVX || 0) * e.netAge, 16, dt);
         e.pos.z = damp(e.pos.z, e.netZ + (e.netVZ || 0) * e.netAge, 16, dt);
+        g.world.resolveCircle(e.pos, e.radius);
       }
       if (e.popT > 0) {
         e.popT -= dt;
@@ -505,7 +518,10 @@ export class MpSession {
       if (!b.active) continue;
       b.life -= dt;
       b.pos.addScaledVector(b.vel, dt);
-      if (b.life <= 0 || Math.abs(b.pos.x) > g.arena + 2 || Math.abs(b.pos.z) > g.arena + 2) {
+      if (b.life <= 0
+        || Math.abs(b.pos.x) > g.arena + 2
+        || Math.abs(b.pos.z) > g.arena + 2
+        || g.world.blocksProjectile(b.pos.x, b.pos.z, 0.22)) {
         b.active = false; b.mesh.visible = false;
         continue;
       }
@@ -541,6 +557,10 @@ export class MpSession {
       if (t.life <= 0) { t.active = false; t.mesh.visible = false; continue; }
       t.mesh.position.x += t.vx * dt;
       t.mesh.position.z += t.vz * dt;
+      if (g.world.blocksProjectile(t.mesh.position.x, t.mesh.position.z, 0.12)) {
+        t.active = false;
+        t.mesh.visible = false;
+      }
     }
     // 位置心跳
     this.posT -= dt;
@@ -561,6 +581,10 @@ export class MpSession {
       if (t.life <= 0) { t.active = false; t.mesh.visible = false; continue; }
       t.mesh.position.x += t.vx * dt;
       t.mesh.position.z += t.vz * dt;
+      if (this.game.world.blocksProjectile(t.mesh.position.x, t.mesh.position.z, 0.12)) {
+        t.active = false;
+        t.mesh.visible = false;
+      }
     }
   }
 
