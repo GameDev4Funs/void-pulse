@@ -8,7 +8,7 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from relay_server import MAX_PENDING_FRAMES, Member, encode_message
+from relay_server import MAX_PENDING_FRAMES, Member, encode_message, handle_message, rooms, rooms_lock
 
 
 def decode_frame(frame):
@@ -40,11 +40,41 @@ class SlowSocket:
         self.release.set()
 
 
+class RecorderMember:
+    def __init__(self, mid, name):
+        self.id = mid
+        self.name = name
+        self.room = None
+        self.sent = []
+
+    def send(self, obj):
+        self.sent.append(obj)
+        return True
+
+    def send_frame(self, frame, replace_key=None):
+        self.sent.append(decode_frame(frame))
+        return True
+
+
 def state(kind, seq):
     return {'t': 'msg', 'from': 1, 'data': {'k': kind, 'seq': seq}}
 
 
 class RelayQueueTest(unittest.TestCase):
+    def tearDown(self):
+        with rooms_lock:
+            rooms.clear()
+
+    def test_room_rejects_mismatched_protocol_version(self):
+        host = RecorderMember(1, 'host')
+        old_guest = RecorderMember(2, 'old')
+        handle_message(host, {'t': 'create', 'room': 'VERSION-ROOM', 'pass': '1234', 'v': 2})
+        handle_message(old_guest, {'t': 'join', 'room': 'VERSION-ROOM', 'pass': '1234', 'v': 1})
+
+        self.assertIsNone(old_guest.room)
+        self.assertEqual(old_guest.sent[-1]['t'], 'err')
+        self.assertIn('版本不一致', old_guest.sent[-1]['msg'])
+
     def test_replaced_snapshot_moves_after_intervening_event(self):
         sock = SlowSocket()
         member = Member(2, 'slow', sock)

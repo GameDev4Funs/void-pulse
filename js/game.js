@@ -21,7 +21,7 @@ import { Net, genRoomCode, genPassword, defaultWsUrl } from './net.js';
 import { MpSession } from './mp.js';
 
 const CAM_OFFSET = new THREE.Vector3(0, 28.5, 15.5);
-const MP_ARENA = 52;
+const MP_ARENA = 64;
 const RESPAWN_TIME = 10;
 
 export class Game {
@@ -178,7 +178,7 @@ export class Game {
     let bd = (p.alive && !p.dead) ? dist2(x, z, bx, bz) : Infinity;
     if (this.mp) {
       for (const q of this.mp.peers.values()) {
-        if (q.dead) continue;
+        if (!q.ready || q.dead) continue;
         const d = dist2(x, z, q.x, q.z);
         if (d < bd) { bd = d; bx = q.x; bz = q.z; bvx = q.vx || 0; bvz = q.vz || 0; }
       }
@@ -192,7 +192,7 @@ export class Game {
     if (p.alive && !p.dead) list.push({ x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z });
     if (this.mp) {
       for (const q of this.mp.peers.values()) {
-        if (!q.dead) list.push({ x: q.x, z: q.z, vx: q.vx || 0, vz: q.vz || 0 });
+        if (q.ready && !q.dead) list.push({ x: q.x, z: q.z, vx: q.vx || 0, vz: q.vz || 0 });
       }
     }
     if (list.length === 0) return { x: 0, z: 0, vx: 0, vz: 0 };
@@ -321,7 +321,7 @@ export class Game {
     this.trauma = 0; this.slowT = 0; this.timeScale = 1;
     this.pendingLevels = 0; this.dyingT = 0;
     this.cardOpen = false;
-    if (this.mp) this.mp.gemTargets.clear();
+    if (this.mp) this.mp.resetRunState();
     this.chain = 0; this.chainT = 0;
     this.chainWindow = CHAIN.window; this.chainScoreMul = 1;
     this.zoneSlowFactor = 1;
@@ -806,6 +806,7 @@ export class Game {
 
     // 时间缩放（顿帧 / 慢动作）
     let target = (this.state === 'playing' || this.state === 'dying') ? 1 : 0;
+    if (this.mp && !this.mp.isHost && this.mp.hostAway) target = 0;
     if (this.slowT > 0) { this.slowT -= rawDt; target = Math.min(target, this.slowScale); }
     if (this.state === 'title' || this.state === 'lobby') target = 1;
     this.timeScale = damp(this.timeScale, target, 14, rawDt);
@@ -849,7 +850,15 @@ export class Game {
     const isGuest = this.mp && !this.mp.isHost;
     const p = this.player;
 
-    if (!isGuest) {
+    // 房主后台时客机完整冻结玩法逻辑，避免恢复后位置、冷却和伤害队列漂移。
+    if (isGuest && this.mp.hostAway) {
+      this.ui.update(rawDt);
+      return;
+    }
+
+    // 客机逐帧推进并柔性校时，主客机的表现时钟都保持单调。
+    if (isGuest) this.mp.advanceGuestClock(dt);
+    else {
       this.time += dt;
       this.score += SCORE.perSecond * dt;
       this.sector = 1 + Math.floor(this.time / 30);

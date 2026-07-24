@@ -1,15 +1,18 @@
 // ============ 联机会话：主机权威 + 客机插值 ============
 import * as THREE from 'three';
-import { ENEMY_TYPES, PALETTE, ULT, PULSE } from './config.js';
-import { damp, dist2, rand } from './utils.js';
+import { ENEMY_TYPES, PALETTE, ULT, PULSE, WALL_PAD } from './config.js';
+import { clamp, damp, dist2, rand } from './utils.js';
 
 const PEER_COLORS = [0xffd23e, 0x4dff88, 0xff8ad8, 0x9fd8ff];
-const SNAP_RATE = 0.125;  // 世界快照 8Hz；插值补足观感，降低多人带宽与序列化压力
-const POS_RATE = 1 / 12;  // 位置 12Hz
+const SNAP_RATE = 0.1;       // 世界快照 10Hz
+const POS_RATE = 1 / 20;     // 玩家位置 20Hz，消息小且直接影响操作观感
+const DMG_RATE = 1 / 30;     // 伤害事件按帧批量冲刷，避免高射速时产生大量小包
+const MAX_EXTRAPOLATION = 0.12;
 
 // —— 队友战机（渲染 + 名牌，无本地逻辑）——
 class RemotePlayer {
-  constructor(scene, name, slot) {
+  constructor(scene, game, name, slot) {
+    this.game = game;
     const color = PEER_COLORS[slot % PEER_COLORS.length];
     this.color = color;
     this.name = name;
@@ -33,6 +36,9 @@ class RemotePlayer {
     scene.add(g);
     this.mesh = g;
     this.tx = 0; this.tz = 0;   // 网络目标位置
+    this.vx = 0; this.vz = 0;
+    this.netAge = 0;
+    this.hasState = false;
     this.yaw = 0;
     // 名牌
     this.label = document.createElement('div');
@@ -40,11 +46,17 @@ class RemotePlayer {
     this.label.textContent = name;
     document.getElementById('text-layer').appendChild(this.label);
     this._v = new THREE.Vector3();
+    this.resetRunState();
   }
 
   update(dt, camera) {
-    this.mesh.position.x = damp(this.mesh.position.x, this.tx, 12, dt);
-    this.mesh.position.z = damp(this.mesh.position.z, this.tz, 12, dt);
+    this.netAge += dt;
+    const lead = Math.min(this.netAge, MAX_EXTRAPOLATION);
+    const edge = this.game.arena - WALL_PAD;
+    const predictedX = clamp(this.tx + this.vx * lead, -edge, edge);
+    const predictedZ = clamp(this.tz + this.vz * lead, -edge, edge);
+    this.mesh.position.x = damp(this.mesh.position.x, predictedX, 18, dt);
+    this.mesh.position.z = damp(this.mesh.position.z, predictedZ, 18, dt);
     this.mesh.position.y = 0.75;
     this.mesh.rotation.y = damp(this.mesh.rotation.y, this.yaw, 10, dt);
     // 名牌投影
@@ -53,9 +65,34 @@ class RemotePlayer {
     this.label.style.top = `${(-this._v.y * innerHeight / 2 + innerHeight / 2).toFixed(0)}px`;
   }
 
+  setNetworkState(x, z, vx, vz, yaw) {
+    if (!this.hasState) {
+      this.mesh.position.x = x;
+      this.mesh.position.z = z;
+      this.hasState = true;
+    }
+    this.tx = x; this.tz = z;
+    this.vx = vx; this.vz = vz;
+    this.yaw = yaw;
+    this.netAge = 0;
+    this.mesh.visible = true;
+    this.label.style.display = 'block';
+  }
+
+  resetRunState() {
+    this.tx = 0; this.tz = 0;
+    this.vx = 0; this.vz = 0;
+    this.netAge = 0;
+    this.hasState = false;
+    this.yaw = 0;
+    this.mesh.position.set(0, 0.75, 0);
+    this.mesh.visible = false;
+    this.label.style.display = 'none';
+  }
+
   setDead(d) {
-    this.mesh.visible = !d;
-    this.label.style.display = d ? 'none' : 'block';
+    this.mesh.visible = this.hasState && !d;
+    this.label.style.display = this.hasState && !d ? 'block' : 'none';
   }
 
   dispose(scene) {
@@ -73,6 +110,11 @@ export class MpSession {
     this.peers = new Map();   // id -> { name, slot, x,z,ax,az,hp,maxHp,lv,magnet,dead, remote }
     this.snapT = 0;
     this.posT = 0;
+    this.dmgT = 0;
+    this.clockSynced = false;
+    this.hostTime = 0;
+    this.lastSnapAt = 0;
+    this.hostAway = false;
     this.dmgQueue = [];
     this.gemTargets = new Map();  // 客机：宝石 id -> [x,z]
     this.tracers = [];
@@ -133,7 +175,7 @@ export class MpSession {
     const slot = this.peers.size;
     this.peers.set(id, {
       id, name, slot, x: 0, z: 0, ax: 0, az: -1, hp: 100, maxHp: 100, lv: 1, magnet: 3,
-      dead: false, remote: new RemotePlayer(this.game.scene, name, slot),
+      dead: false, ready: false, remote: new RemotePlayer(this.game.scene, this.game, name, slot),
     });
   }
 
@@ -150,6 +192,40 @@ export class MpSession {
 
   get playerCount() { return 1 + this.peers.size; }
 
+  resetRunState() {
+    this.snapT = 0;
+    this.posT = 0;
+    this.dmgT = 0;
+    this.clockSynced = false;
+    this.hostTime = 0;
+    this.lastSnapAt = 0;
+    this.hostAway = false;
+    this.dmgQueue.length = 0;
+    this.gemTargets.clear();
+    for (const p of this.peers.values()) {
+      p.x = 0; p.z = 0; p.vx = 0; p.vz = 0;
+      p.ax = 0; p.az = -1;
+      p.hp = 100; p.maxHp = 100; p.lv = 1; p.magnet = 3;
+      p.dead = false; p.ready = false;
+      p.remote.resetRunState();
+    }
+  }
+
+  advanceGuestClock(dt) {
+    const g = this.game;
+    const previous = g.time;
+    if (this.hostAway) return;
+    let next = previous + dt;
+    if (this.clockSynced) {
+      const estimatedHostTime = this.hostTime + (performance.now() / 1000 - this.lastSnapAt);
+      const error = estimatedHostTime - next;
+      // 主机大幅领先时可安全向前追帧；落后时最多减速到 10%，绝不回拨。
+      if (error > 2) next = estimatedHostTime;
+      else next += clamp(error * 0.08, -dt * 0.9, dt);
+    }
+    g.time = Math.max(previous, next);
+  }
+
   // 房主视角：所有存活玩家的位置（敌人 AI 用）
   alivePlayerInfos() {
     const g = this.game;
@@ -158,7 +234,7 @@ export class MpSession {
       out.push({ id: this.net.id, x: g.player.pos.x, z: g.player.pos.z, magnet: g.player.stats.magnet, self: true });
     }
     for (const p of this.peers.values()) {
-      if (!p.dead) out.push({ id: p.id, x: p.x, z: p.z, magnet: p.magnet, self: false });
+      if (p.ready && !p.dead) out.push({ id: p.id, x: p.x, z: p.z, magnet: p.magnet, self: false });
     }
     return out;
   }
@@ -176,15 +252,16 @@ export class MpSession {
         p.x = d.x; p.z = d.z; p.ax = d.a; p.az = d.b;
         p.vx = d.v ? d.v[0] : 0; p.vz = d.v ? d.v[1] : 0;
         p.hp = d.h; p.maxHp = d.m; p.lv = d.l; p.magnet = d.g;
-        if (p.dead !== !!d.d) { p.dead = !!d.d; p.remote.setDead(p.dead); }
-        p.remote.tx = d.x; p.remote.tz = d.z;
-        p.remote.yaw = Math.atan2(d.a, d.b);
+        p.ready = true;
+        p.remote.setNetworkState(d.x, d.z, p.vx, p.vz, Math.atan2(d.a, d.b));
+        p.dead = !!d.d;
+        p.remote.setDead(p.dead);
         break;
       }
       case 'begin': g.startMp(); break;
       case 'snap': if (!this.isHost) this._applySnap(d); break;
       case 'tele': if (!this.isHost) g.enemies.netTelegraph(d.ty, d.x, d.z, d.el, d.du); break;
-      case 'sp': if (!this.isHost) g.enemies.spawnNet(d.id, d.ty, d.x, d.z, d.el); break;
+      case 'sp': if (!this.isHost) g.enemies.spawnNet(d.id, d.ty, d.x, d.z, d.el, d.gn); break;
       case 'de': if (!this.isHost) this._onEnemyDeath(d); break;
       case 'eb': if (!this.isHost) g.enemies.fireEBullet(d.x, d.z, d.dx, d.dz, d.sp, d.dm); break;
       case 'ceb': if (!this.isHost) g.enemies.clearEBullets(); break;
@@ -203,8 +280,20 @@ export class MpSession {
       case 'fx': this._onFx(from, d); break;
       case 'gov': if (!this.isHost) g.mpGameOver(d); break;
       case 'blast': if (!this.isHost) this._onBlast(d); break;
-      case 'hostaway': if (!this.isHost) g.ui.toast('⏸ 房主切换了标签页，世界暂停中…', '#ff9f3e'); break;
-      case 'hostback': if (!this.isHost) g.ui.toast('▶ 房主回来了，继续战斗！', '#4dff88'); break;
+      case 'hostaway':
+        if (!this.isHost) {
+          this.hostAway = true;
+          g.ui.toast('⏸ 房主切换了标签页，世界暂停中…', '#ff9f3e');
+        }
+        break;
+      case 'hostback':
+        if (!this.isHost) {
+          this.hostAway = false;
+          this.clockSynced = false;
+          this.lastSnapAt = 0;
+          g.ui.toast('▶ 房主回来了，继续战斗！', '#4dff88');
+        }
+        break;
     }
   }
 
@@ -219,12 +308,13 @@ export class MpSession {
         const e = g.enemies.list[i];
         if (!e.active || e.dying) continue;
         const flags = (e.elite ? 1 : 0) | (e.burnT > 0 ? 2 : 0) | (e.fuseT >= 0 ? 4 : 0);
-        en.push([i, e.type, +e.pos.x.toFixed(1), +e.pos.z.toFixed(1), Math.max(0, Math.round((e.hp / e.maxHp) * 100)), flags]);
+        // 类型已由可靠的生成事件同步，快照只发高频变化字段。
+        en.push([i, e.generation, +e.pos.x.toFixed(1), +e.pos.z.toFixed(1), Math.max(0, Math.round((e.hp / e.maxHp) * 100)), flags]);
       }
       const gm = [];
       g.pickups.gems.forEach((q, i) => { if (q.active) gm.push([i, +q.pos.x.toFixed(1), +q.pos.z.toFixed(1)]); });
       this.send({
-        k: 'snap', tm: +g.time.toFixed(1), sc: Math.floor(g.score), ch: g.chain, sec: g.sector,
+        k: 'snap', tm: +g.time.toFixed(2), sc: Math.floor(g.score), ch: g.chain, sec: g.sector,
         xp: g.player.xp, lv: g.player.level, en, gm,
         bhp: g.enemies.bossActive ? +(g.enemies.bossActive.hp / g.enemies.bossActive.maxHp).toFixed(2) : -1,
       });
@@ -249,8 +339,8 @@ export class MpSession {
 
   // 主机事件转发
   evTelegraph(ty, x, z, el, du) { this.send({ k: 'tele', ty, x: +x.toFixed(1), z: +z.toFixed(1), el: el ? 1 : 0, du }); }
-  evSpawn(e, id) { this.send({ k: 'sp', id, ty: e.type, x: +e.pos.x.toFixed(1), z: +e.pos.z.toFixed(1), el: e.elite ? 1 : 0 }); }
-  evDeath(e, id) { this.send({ k: 'de', id, ty: e.type, x: +e.pos.x.toFixed(1), z: +e.pos.z.toFixed(1), el: e.elite ? 1 : 0 }); }
+  evSpawn(e, id) { this.send({ k: 'sp', id, gn: e.generation, ty: e.type, x: +e.pos.x.toFixed(1), z: +e.pos.z.toFixed(1), el: e.elite ? 1 : 0 }); }
+  evDeath(e, id) { this.send({ k: 'de', id, gn: e.generation, ty: e.type, x: +e.pos.x.toFixed(1), z: +e.pos.z.toFixed(1), el: e.elite ? 1 : 0 }); }
   evEBullet(x, z, dx, dz, sp, dm) { this.send({ k: 'eb', x: +x.toFixed(1), z: +z.toFixed(1), dx: +dx.toFixed(2), dz: +dz.toFixed(2), sp, dm: Math.round(dm) }); }
   evWeb(x, z) { this.send({ k: 'web', x: +x.toFixed(1), z: +z.toFixed(1) }); }
   evGemDrop(g, id) { this.send({ k: 'gd', id, x: +g.pos.x.toFixed(1), z: +g.pos.z.toFixed(1), v: g.value }); }
@@ -261,14 +351,32 @@ export class MpSession {
   // ============ 客机：快照应用 ============
   _applySnap(d) {
     const g = this.game;
-    g.time = d.tm; g.score = d.sc; g.chain = d.ch; g.sector = d.sec;
+    const now = performance.now() / 1000;
+    // 本地时钟逐帧运行；快照记录主机时间，逐帧校正而不是在消息回调里跳变。
+    if (!this.clockSynced) {
+      g.time = Math.max(g.time, d.tm);
+      this.clockSynced = true;
+    }
+    this.hostTime = d.tm;
+    g.score = d.sc; g.chain = d.ch; g.sector = d.sec;
     g.player.xp = d.xp; g.player.level = d.lv;
+    const sampleDt = this.lastSnapAt ? clamp(now - this.lastSnapAt, 0.05, 0.25) : SNAP_RATE;
+    this.lastSnapAt = now;
     const seen = new Set();
-    for (const [id, ty, x, z, hpf, flags] of d.en) {
+    for (const [id, generation, x, z, hpf, flags] of d.en) {
       seen.add(id);
       const e = g.enemies.list[id];
-      if (!e || !e.active || e.type !== ty) continue;   // 等 sp 事件激活
+      if (!e || !e.active || e.generation !== generation) continue;   // 等对应代际的 sp 事件激活
+      if (e.netX === undefined) {
+        e.netVX = 0; e.netVZ = 0;
+      } else {
+        const sampleVX = clamp((x - e.netX) / sampleDt, -40, 40);
+        const sampleVZ = clamp((z - e.netZ) / sampleDt, -40, 40);
+        e.netVX = damp(e.netVX || 0, sampleVX, 12, sampleDt);
+        e.netVZ = damp(e.netVZ || 0, sampleVZ, 12, sampleDt);
+      }
       e.netX = x; e.netZ = z;
+      e.netAge = 0;
       const prevFrac = e.netHpFrac ?? 1;
       e.netHpFrac = hpf / 100;
       if (e.netHpFrac < prevFrac - 0.005) { e.flashT = 0.09; e.punchT = 0.14; }
@@ -302,6 +410,7 @@ export class MpSession {
   _onEnemyDeath(d) {
     const g = this.game;
     const e = g.enemies.list[d.id];
+    if (!e || e.generation !== d.gn) return;
     g.playDeathFx(d.x, d.z, d.ty, !!d.el);
     g.pulse = Math.min(PULSE.max, g.pulse + PULSE.perKill);
     // 客机本地流派触发：爆燃 / 落雷
@@ -365,8 +474,9 @@ export class MpSession {
     for (const e of g.enemies.list) {
       if (!e.active) continue;
       if (e.netX !== undefined) {
-        e.pos.x = damp(e.pos.x, e.netX, 10, dt);
-        e.pos.z = damp(e.pos.z, e.netZ, 10, dt);
+        e.netAge = Math.min((e.netAge || 0) + dt, MAX_EXTRAPOLATION);
+        e.pos.x = damp(e.pos.x, e.netX + (e.netVX || 0) * e.netAge, 16, dt);
+        e.pos.z = damp(e.pos.z, e.netZ + (e.netVZ || 0) * e.netAge, 16, dt);
       }
       if (e.popT > 0) {
         e.popT -= dt;
@@ -436,7 +546,9 @@ export class MpSession {
     this.posT -= dt;
     if (this.posT <= 0) { this.posT = POS_RATE; this.sendPos(); }
     // 伤害事件冲刷
-    if (this.dmgQueue.length) {
+    this.dmgT -= dt;
+    if (this.dmgQueue.length && this.dmgT <= 0) {
+      this.dmgT = DMG_RATE;
       this.send({ k: 'dmg', list: this.dmgQueue.splice(0, this.dmgQueue.length) });
     }
   }
@@ -454,16 +566,16 @@ export class MpSession {
 
   // ============ 伤害事件 ============
   queueDmg(e, dmg, crit, knock, kx, kz) {
-    const id = this.game.enemies.list.indexOf(e);
+    const id = e.netId;
     if (id < 0) return;
-    this.dmgQueue.push([id, dmg, crit ? 1 : 0, knock, Math.round(kx), Math.round(kz)]);
+    this.dmgQueue.push([id, e.generation, dmg, crit ? 1 : 0, knock, Math.round(kx), Math.round(kz)]);
   }
 
   _applyDmgEvents(list) {
     const g = this.game;
-    for (const [id, d, c, kn, kx, kz] of list) {
+    for (const [id, generation, d, c, kn, kx, kz] of list) {
       const e = g.enemies.list[id];
-      if (!e || !e.active || e.dying) continue;
+      if (!e || !e.active || e.dying || e.generation !== generation) continue;
       g.damageEnemy(e, d, { crit: !!c, knock: kn, kx, kz });
     }
   }

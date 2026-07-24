@@ -55,6 +55,7 @@ export class Enemies {
         }
         scene.add(mesh);
         this.list.push({
+          netId: this.list.length, generation: 0,
           type, mesh, mat, active: false, dying: false,
           pos: mesh.position, vel: new THREE.Vector3(),
           hp: 1, maxHp: 1, speed: 1, dmg: 1, radius: 1, xp: 1, score: 1, knockRes: 0,
@@ -302,14 +303,16 @@ export class Enemies {
   }
 
   // 客机：按指定池位激活敌人（纯表现，无数值）
-  spawnNet(id, type, x, z, elite) {
+  spawnNet(id, type, x, z, elite, generation) {
     const e = this.list[id];
     if (!e || e.type !== type) return;
     const base = ENEMY_TYPES[type];
     e.active = true; e.dying = false;
     e.netActive = true;
+    e.generation = generation;
     e.pos.set(x, type === 'boss' ? 2.6 : 0.75, z);
     e.vel.set(0, 0, 0);
+    e.netX = x; e.netZ = z; e.netVX = 0; e.netVZ = 0; e.netAge = 0;
     e.radius = base.radius * (elite ? 1.35 : 1);
     e.dmg = base.dmg;
     e.elite = elite;
@@ -332,6 +335,7 @@ export class Enemies {
     const hpMul = (type === 'boss' ? 1 + 0.65 * this.bossMark() : 1 + t / 78) * mpHp;
     const spdMul = Math.min(1.45, 1 + t / 700);
     e.active = true; e.dying = false;
+    e.generation++;
     e.pos.set(x, type === 'boss' ? 2.6 : 0.75, z);
     e.vel.set(0, 0, 0);
     e.maxHp = e.hp = Math.round(base.hp * hpMul * (elite ? 3.2 : 1));
@@ -365,7 +369,7 @@ export class Enemies {
       this.game.particles.burst(x, 1, z, 50, PALETTE.boss, { speed: 14, life: 0.9, size: 0.9 });
     }
     this.activeCount++;
-    if (this.game.mpIsHost()) this.game.mp.evSpawn(e, this.list.indexOf(e));
+    if (this.game.mpIsHost()) this.game.mp.evSpawn(e, e.netId);
     return e;
   }
 
@@ -752,7 +756,7 @@ export class Enemies {
     e.active = false;
     e.mesh.visible = false;
     this.activeCount--;
-    if (g.mpIsHost()) g.mp.evDeath(e, this.list.indexOf(e));
+    if (g.mpIsHost()) g.mp.evDeath(e, e.netId);
     if (e.type === 'splitter') {
       for (let i = 0; i < 3; i++) {
         const a = rand(Math.PI * 2);

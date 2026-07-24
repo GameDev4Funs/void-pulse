@@ -1,4 +1,4 @@
-import { defaultWsUrl } from '../js/net.js';
+import { defaultWsUrl, Net, PROTOCOL_VERSION } from '../js/net.js';
 
 globalThis.location = {
   protocol: 'http:',
@@ -25,6 +25,15 @@ globalThis.location = {
 };
 if (defaultWsUrl() !== 'ws://localhost:8124') {
   throw new Error('显式 WebSocket 调试地址没有生效');
+}
+
+const sent = [];
+const net = new Net();
+net.ws = { readyState: 1, send: (payload) => sent.push(JSON.parse(payload)) };
+net.create('ROOM', '1234');
+net.join('ROOM', '1234');
+if (sent.some((message) => message.v !== PROTOCOL_VERSION)) {
+  throw new Error('建房/加入没有携带当前联机协议版本');
 }
 
 console.log('✓ WebSocket URL 协议与同源路由正确');

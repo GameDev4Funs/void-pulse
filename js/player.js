@@ -1,6 +1,6 @@
 // ============ 玩家：幽灵战机 ============
 import * as THREE from 'three';
-import { PLAYER, ARENA, WALL_PAD, PALETTE } from './config.js';
+import { PLAYER, WALL_PAD, PALETTE } from './config.js';
 import { clamp, damp } from './utils.js';
 
 export class Player {
@@ -184,8 +184,15 @@ export class Player {
       this.vel.z = damp(this.vel.z, targetVz, lambda, dt);
     }
 
-    this.pos.x = clamp(this.pos.x + this.vel.x * dt, -ARENA + WALL_PAD, ARENA - WALL_PAD);
-    this.pos.z = clamp(this.pos.z + this.vel.z * dt, -ARENA + WALL_PAD, ARENA - WALL_PAD);
+    // 联机会动态扩大场地，碰撞边界必须与当前世界的可视围墙一致。
+    const edge = game.arena - WALL_PAD;
+    const nextX = this.pos.x + this.vel.x * dt;
+    const nextZ = this.pos.z + this.vel.z * dt;
+    this.pos.x = clamp(nextX, -edge, edge);
+    this.pos.z = clamp(nextZ, -edge, edge);
+    // 撞墙后清除朝墙外的速度，避免网络预测把队友模型外推到墙外。
+    if (this.pos.x !== nextX) this.vel.x = 0;
+    if (this.pos.z !== nextZ) this.vel.z = 0;
 
     // —— 朝向瞄准点 ——
     const dx = this.aimPoint.x - this.pos.x, dz = this.aimPoint.z - this.pos.z;

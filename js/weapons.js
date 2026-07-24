@@ -218,7 +218,7 @@ export class Weapons {
       if (!b.active) continue;
       b.life -= dt;
       b.pos.addScaledVector(b.vel, dt);
-      if (b.life <= 0 || Math.abs(b.pos.x) > 40 || Math.abs(b.pos.z) > 40) {
+      if (b.life <= 0 || Math.abs(b.pos.x) > g.arena + 4 || Math.abs(b.pos.z) > g.arena + 4) {
         b.active = false; b.mesh.visible = false; b.hitSet.clear();
         continue;
       }

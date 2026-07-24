@@ -28,6 +28,13 @@ def gen_id():
         return i
 
 
+def protocol_version(msg):
+    try:
+        return int(msg.get('v', 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def http_read_headers(sock):
     data = b''
     while b'\r\n\r\n' not in data:
@@ -230,6 +237,7 @@ def handle_message(member, msg):
     if t == 'create':
         room_name = str(msg.get('room', ''))[:24]
         password = str(msg.get('pass', ''))[:16]
+        version = protocol_version(msg)
         if not room_name:
             member.send({'t': 'err', 'msg': '房间名无效'})
             return
@@ -238,7 +246,12 @@ def handle_message(member, msg):
             if room_name in rooms:
                 error = '房间名已存在，换一个'
             else:
-                rooms[room_name] = {'password': password, 'host': member.id, 'members': {member.id: member}}
+                rooms[room_name] = {
+                    'password': password,
+                    'version': version,
+                    'host': member.id,
+                    'members': {member.id: member},
+                }
                 member.room = room_name
         if error:
             member.send({'t': 'err', 'msg': error})
@@ -247,6 +260,7 @@ def handle_message(member, msg):
     elif t == 'join':
         room_name = str(msg.get('room', ''))[:24]
         password = str(msg.get('pass', ''))[:16]
+        version = protocol_version(msg)
         error = None
         peers = []
         recipients = []
@@ -257,6 +271,8 @@ def handle_message(member, msg):
                 error = '房间不存在'
             elif room['password'] != password:
                 error = '密码错误'
+            elif room.get('version', 1) != version:
+                error = '游戏版本不一致，请刷新页面后重试'
             elif len(room['members']) >= MAX_MEMBERS:
                 error = '房间已满（最多 4 人）'
             else:

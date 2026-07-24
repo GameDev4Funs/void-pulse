@@ -23,7 +23,7 @@ async function newPage(tag) {
     headless: 'new',
     protocolTimeout: 60000,
     args: ['--no-sandbox', '--mute-audio', '--enable-unsafe-swiftshader'],
-    defaultViewport: { width: 640, height: 400 },
+    defaultViewport: { width: 960, height: 600 },
   });
   browsers.push(browser);
   const page = await browser.newPage();
@@ -32,13 +32,19 @@ async function newPage(tag) {
   page.on('console', (message) => {
     if (message.type() === 'error') errors.push(`[${tag}] ${message.text()}`);
   });
-  await page.goto(`${URL}?lowfx=1&bench=1`, { waitUntil: 'networkidle0' });
+  // 使用默认画质并实际执行 Bloom/composer，覆盖朋友直接打开分享地址的路径。
+  await page.goto(URL, { waitUntil: 'networkidle0' });
   await page.evaluate(() => {
     window.__fpsSamples = [];
+    window.__frameTimes = [];
     let frames = 0;
     let sampleAt = performance.now();
+    let previousFrameAt = sampleAt;
     const sample = (now) => {
       frames++;
+      window.__frameTimes.push(now - previousFrameAt);
+      if (window.__frameTimes.length > 900) window.__frameTimes.shift();
+      previousFrameAt = now;
       if (now - sampleAt >= 1000) {
         window.__fpsSamples.push(frames * 1000 / (now - sampleAt));
         if (window.__fpsSamples.length > 30) window.__fpsSamples.shift();
@@ -104,22 +110,27 @@ try {
   const stats = await Promise.all(pages.map((page) => page.evaluate(() => {
     const game = window.__DBG.game;
     const samples = window.__fpsSamples.slice(-8);
+    const frameTimes = window.__frameTimes.slice(-600).sort((a, b) => a - b);
+    const p95 = frameTimes.length ? frameTimes[Math.floor((frameTimes.length - 1) * 0.95)] : Infinity;
     return {
       state: game.state,
       time: game.time,
       enemies: game.enemies.list.filter((enemy) => enemy.active).length,
       fpsAvg: samples.length ? samples.reduce((sum, value) => sum + value, 0) / samples.length : 0,
       fpsMin: samples.length ? Math.min(...samples) : 0,
+      frameP95: p95,
       buffered: game.net?.ws?.bufferedAmount || 0,
     };
   })));
 
   const minAverageFps = Math.min(...stats.map((stat) => stat.fpsAvg));
   const maxBuffered = Math.max(...stats.map((stat) => stat.buffered));
+  const maxFrameP95 = Math.max(...stats.map((stat) => stat.frameP95));
   const timeSpread = Math.max(...stats.map((stat) => stat.time)) - Math.min(...stats.map((stat) => stat.time));
   check('四端保持战斗状态', stats.every((stat) => stat.state === 'playing'));
   check('四端都收到敌人世界', stats.every((stat) => stat.enemies > 0));
   check('四端平均帧率不低于 30 FPS', minAverageFps >= 30, `（最低 ${minAverageFps.toFixed(1)}）`);
+  check('四端 95% 帧时间低于 34ms', maxFrameP95 < 34, `（最差 ${maxFrameP95.toFixed(1)}ms）`);
   check('同步时钟偏差小于 1.5 秒', timeSpread < 1.5, `（偏差 ${timeSpread.toFixed(2)}s）`);
   check('浏览器发送侧无 WebSocket 积压', maxBuffered < 256 * 1024, `（最大 ${maxBuffered} bytes）`);
   check('浏览器控制台无错误', errors.length === 0, `（${errors.length}）`);
