@@ -2,6 +2,7 @@
   "name": "void-pulse",
   "version": "1.0.0",
   "description": "3D neon arena survivor web game",
+  "license": "MIT",
   "scripts": {
     "start": "python3 scripts/server.py",
     "test:mp": "node scripts/mp_test.mjs",

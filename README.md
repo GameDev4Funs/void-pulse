@@ -106,3 +106,10 @@ node scripts/smoke.mjs [url]   # 状态机冒烟（需本地 Chrome）
 node scripts/soak.mjs          # 高压浸泡（全进化武器 + 全敌人 + 包围事件）
 node scripts/evo_check.mjs     # 进化卡出现逻辑
 ```
+
+## 许可
+
+本项目采用 [MIT License](LICENSE)，© 2026 awsomekde。
+
+第三方组件：`vendor/three` 为 Three.js r185 的本地打包副本，同样以 MIT 授权，
+版权归 Three.js Authors 所有，许可证全文见 [vendor/three/LICENSE](vendor/three/LICENSE)。
