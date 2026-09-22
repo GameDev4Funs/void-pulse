@@ -181,6 +181,7 @@ export class UI {
   showPause(show) { this.el.pause.classList.toggle('hidden', !show); }
 
   showLevelUp(cards, views, onPick) {
+    this.el.hud.classList.toggle('choosing-upgrade', !!this.game.mp);
     this.el.levelup.classList.toggle('mp-cards', !!this.game.mp);
     $('levelup-sub').firstChild.textContent = this.game.mp ? '战斗继续 · 选卡后获得短暂无敌 ' : '选择一项强化 ';
     $('reroll-btn').textContent = `重抽 [R] · ${this.game.rerolls} 次${views.some((v) => v.cls === 'r-evolve') ? ' · 保留进化机会' : ''}`;
@@ -210,7 +211,7 @@ export class UI {
       wrap.appendChild(div);
     });
   }
-  hideLevelUp() { this.el.levelup.classList.add('hidden'); }
+  hideLevelUp() { this.el.levelup.classList.add('hidden'); this.el.hud.classList.remove('choosing-upgrade'); }
 
   openSettings() {
     if (this.settingsOpen) return;

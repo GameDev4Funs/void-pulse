@@ -441,9 +441,12 @@ check('补给过期不会在客机留下幽灵舱', await B.evaluate(() => windo
 const spawnedDamage = await A.evaluate(() => {
   const g = window.__DBG.game;
   const e = g.enemies.spawnNow('tank', 60, 60, true);
-  return { id: e.netId, damage: e.dmg };
+  return { id: e.netId, damage: e.dmg, generation: e.generation };
 });
-await sleep(200);
+await B.waitForFunction(({ id, damage, generation }) => {
+  const e = window.__DBG.game.enemies.list[id];
+  return e.active && e.generation === generation && e.dmg === damage;
+}, { timeout: 5000 }, spawnedDamage).catch(() => {});
 check('精英接触伤害包含主机成长倍率', await B.evaluate(({ id, damage }) => window.__DBG.game.enemies.list[id].dmg === damage, spawnedDamage));
 check('经验池满仍保留当前块经验', await A.evaluate(() => {
   const g = window.__DBG.game;
