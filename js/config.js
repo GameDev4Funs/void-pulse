@@ -66,8 +66,8 @@ export const DIRECTOR = {
   eliteChance: 0.14,
   telegraphTime: 0.95,
   flankChance: 0.28,      // 少量截杀，避免持续在玩家正前方刷怪
-  spawnMinDistance: 19,
-  spawnMaxDistance: 29,
+  spawnMinDistance: 17,
+  spawnMaxDistance: 26,
   spawnSafeDistance: 15,  // 与所有存活玩家保持的最低距离
   encircleFirst: 72,
   encircleEvery: 84,
@@ -143,6 +143,9 @@ export const SPAWN_WEIGHTS = [
   ['tank',     20],
   ['weaver',   16],
 ];
+
+// 重型与远程敌人消耗更多威胁预算，避免解锁后同样频率下强度骤增。
+export const SPAWN_COST = { chaser: 1, speeder: 1, bomber: 1.4, splitter: 1.6, shooter: 1.8, hunter: 1.8, tank: 2.8, weaver: 2.4 };
 
 export const XP_CURVE = (level) => Math.floor(6 + level * 4.5 + level * level * 0.35);
 

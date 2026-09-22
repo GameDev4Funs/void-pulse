@@ -58,13 +58,13 @@ export class Pickups {
     }
   }
 
-  spawnSupply(x, z) {
-    const s = this.supplies.find((q) => !q.active);
+  spawnSupply(x, z, id) {
+    const s = id === undefined ? this.supplies.find((q) => !q.active) : this.supplies[id];
     if (!s) return;
     s.active = true; s.x = x; s.z = z; s.t = 0; s.landed = false;
     s.mesh.position.set(x, 22, z);
     s.mesh.visible = true;
-    if (this.game.mpIsHost()) this.game.mp.evSupply(x, z);
+    if (this.game.mpIsHost()) this.game.mp.evSupply(x, z, this.supplies.indexOf(s));
   }
 
   reset() {
@@ -80,7 +80,7 @@ export class Pickups {
       const chunk = v >= 5 ? 5 : v;
       v -= chunk;
       const g = this.gems.find((q) => !q.active);
-      if (!g) { this.game.addXp(v); return; }   // 池满直接入账
+      if (!g) { this.game.addXp(v + chunk); return; }   // 池满，当前块与剩余经验都入账
       g.active = true;
       g.value = chunk;
       g.magnet = false;
@@ -212,7 +212,7 @@ export class Pickups {
         for (const pl of players) {
           if (dist2(s.x, s.z, pl.x, pl.z) < SUPPLY.pickupR * SUPPLY.pickupR) {
             s.active = false; s.mesh.visible = false;
-            g.onSupplyTaken(s.x, s.z, pl);
+            g.onSupplyTaken(s.x, s.z, pl, this.supplies.indexOf(s));
             break;
           }
         }

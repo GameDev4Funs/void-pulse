@@ -9,6 +9,7 @@
     "test:mp:perf": "node scripts/mp_perf.mjs",
     "test:net": "node scripts/net_url_test.mjs",
     "test:relay": "python3 scripts/relay_queue_test.py",
+    "test:reactor": "node scripts/reactor_test.mjs",
     "test:smoke": "node scripts/smoke.mjs"
   },
   "type": "module",

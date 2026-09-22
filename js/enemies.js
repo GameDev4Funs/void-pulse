@@ -1,6 +1,6 @@
 // ============ 敌人：类型 / AI / 生成导演 / Boss ============
 import * as THREE from 'three';
-import { ENEMY_TYPES, SPAWN_WEIGHTS, DIRECTOR, PALETTE } from './config.js';
+import { ENEMY_TYPES, SPAWN_WEIGHTS, SPAWN_COST, DIRECTOR, PALETTE } from './config.js';
 import { rand, pick, clamp, dist2 } from './utils.js';
 
 const POOL_SIZES = { chaser: 130, speeder: 90, splitter: 45, mini: 100, shooter: 45, tank: 32, boss: 2, bomber: 70, hunter: 60, weaver: 30 };
@@ -130,6 +130,7 @@ export class Enemies {
     this.chargeLine.visible = false;
     this.spawnT = DIRECTOR.firstSpawnDelay;
     this.spawnBudget = 0;
+    this.nextSpawnType = null;
     this.pendingCount = 0;
     this.spawnTargetCursor = 0;
     this.lastSpawnAngle = rand(Math.PI * 2);
@@ -221,7 +222,6 @@ export class Enemies {
       let issued = 0;
       while (this.spawnBudget >= 1 && room > 0 && issued < 3) {
         if (!this.spawnOne(t)) break;
-        this.spawnBudget -= 1;
         room--;
         issued++;
       }
@@ -238,7 +238,11 @@ export class Enemies {
           this.pendingCount = Math.max(0, this.pendingCount - 1);
           tg.counted = false;
         }
-        this.spawnNow(tg.type, tg.mesh.position.x, tg.mesh.position.z, tg.elite);
+        // 玩家冲进预警圈时取消本次生成，不把敌人直接刷到战机身上。
+        const safe = ENEMY_TYPES[tg.type].radius + 2.2;
+        if (!g.alivePlayerPositions().some((p) => dist2(p.x, p.z, tg.mesh.position.x, tg.mesh.position.z) < safe * safe)) {
+          this.spawnNow(tg.type, tg.mesh.position.x, tg.mesh.position.z, tg.elite);
+        }
         continue;
       }
       const pulse = 0.75 + Math.sin(f * 25) * 0.25;
@@ -297,7 +301,9 @@ export class Enemies {
 
   spawnOne(t) {
     const g = this.game;
-    const type = this.pickType(t);
+    const type = this.nextSpawnType || (this.nextSpawnType = this.pickType(t));
+    const cost = SPAWN_COST[type] || 1;
+    if (this.spawnBudget < cost) return false;
     // 玩家轮转而不是随机抽样，联机时压力更均匀。
     const players = g.alivePlayerPositions();
     if (!players.length) return false;
@@ -306,7 +312,9 @@ export class Enemies {
     if (!pos) return false;
     const eliteRamp = clamp((t - DIRECTOR.eliteAfter) / 120, 0, 1);
     const elite = Math.random() < DIRECTOR.eliteChance * eliteRamp;
-    return this.queueSpawn(type, pos.x, pos.z, elite, DIRECTOR.telegraphTime);
+    const queued = this.queueSpawn(type, pos.x, pos.z, elite, DIRECTOR.telegraphTime);
+    if (queued) { this.spawnBudget -= cost; this.nextSpawnType = null; }
+    return queued;
   }
 
   findSpawnPosition(target, type, minDistance = DIRECTOR.spawnMinDistance, maxDistance = DIRECTOR.spawnMaxDistance) {
@@ -357,9 +365,9 @@ export class Enemies {
     const g = this.game;
     if (this.spawnRoom() <= 0) return false;
     if (!g.world.isSpawnClear(x, z, ENEMY_TYPES[type].radius)) return false;
-    if (g.mpIsHost()) g.mp.evTelegraph(type, x, z, elite, dur);
     const tg = this.telegraphs.find((q) => !q.active);
-    if (!tg) return !!this.spawnNow(type, x, z, elite);
+    if (!tg) return false;
+    if (g.mpIsHost()) g.mp.evTelegraph(type, x, z, elite, dur);
     this.pendingCount++;
     tg.active = true; tg.t = 0; tg.dur = dur;
     tg.counted = true;
@@ -383,7 +391,7 @@ export class Enemies {
   }
 
   // 客机：按指定池位激活敌人（纯表现，无数值）
-  spawnNet(id, type, x, z, elite, generation) {
+  spawnNet(id, type, x, z, elite, generation, damage) {
     const e = this.list[id];
     if (!e || e.type !== type) return;
     const base = ENEMY_TYPES[type];
@@ -394,7 +402,7 @@ export class Enemies {
     e.vel.set(0, 0, 0);
     e.netX = x; e.netZ = z; e.netVX = 0; e.netVZ = 0; e.netAge = 0;
     e.radius = base.radius * (elite ? 1.35 : 1);
-    e.dmg = base.dmg;
+    e.dmg = Number.isFinite(damage) ? damage : base.dmg;
     e.elite = elite;
     e.hp = e.maxHp = base.hp;
     e.netHpFrac = 1;

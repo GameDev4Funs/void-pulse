@@ -2,7 +2,8 @@
 import { clamp, rand } from './utils.js';
 
 export class AudioEngine {
-  constructor() {
+  constructor(settings = { music: 0.55, sfx: 0.8 }) {
+    this.settings = settings;
     this.ctx = null;
     this.master = null;
     this.sfxGain = null;
@@ -28,8 +29,8 @@ export class AudioEngine {
     const comp = c.createDynamicsCompressor();
     comp.threshold.value = -18; comp.knee.value = 22; comp.ratio.value = 8;
     this.master.connect(comp); comp.connect(c.destination);
-    this.sfxGain = c.createGain(); this.sfxGain.gain.value = 0.9; this.sfxGain.connect(this.master);
-    this.musicGain = c.createGain(); this.musicGain.gain.value = 0.3; this.musicGain.connect(this.master);
+    this.sfxGain = c.createGain(); this.sfxGain.gain.value = this.settings.sfx; this.sfxGain.connect(this.master);
+    this.musicGain = c.createGain(); this.musicGain.gain.value = this.settings.music * 0.5; this.musicGain.connect(this.master);
     // 共享噪声缓冲
     const len = c.sampleRate * 1;
     this.noiseBuf = c.createBuffer(1, len, c.sampleRate);
@@ -40,6 +41,12 @@ export class AudioEngine {
   }
 
   resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); }
+
+  setVolumes() {
+    if (!this.ctx) return;
+    this.sfxGain.gain.setTargetAtTime(this.settings.sfx, this.ctx.currentTime, 0.03);
+    this.musicGain.gain.setTargetAtTime(this.settings.music * 0.5, this.ctx.currentTime, 0.03);
+  }
 
   setMuted(m) {
     this.muted = m;
@@ -58,6 +65,7 @@ export class AudioEngine {
     g.gain.setValueAtTime(vol, t0);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     o.connect(g); g.connect(dest || this.sfxGain);
+    o.onended = () => { o.disconnect(); g.disconnect(); };
     o.start(t0); o.stop(t0 + dur + 0.02);
   }
 
@@ -71,6 +79,7 @@ export class AudioEngine {
     g.gain.setValueAtTime(vol, t0);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     s.connect(f); f.connect(g); g.connect(this.sfxGain);
+    s.onended = () => { s.disconnect(); f.disconnect(); g.disconnect(); };
     s.start(t0); s.stop(t0 + dur + 0.02);
   }
 
@@ -226,6 +235,24 @@ export class AudioEngine {
     this.osc('sine', 45, 22, t + 0.8, 1.3, 0.3);
   }
 
+  reactorReady() {
+    if (!this.enabled) return;
+    const t = this.ctx.currentTime;
+    [440, 660, 880].forEach((f, i) => this.osc('sine', f, f, t + i * 0.14, 0.24, 0.12));
+  }
+  reactorCapture() {
+    if (!this.enabled) return;
+    const t = this.ctx.currentTime;
+    [262, 330, 392, 523, 784].forEach((f, i) => this.osc('triangle', f, f, t + i * 0.08, 0.5, 0.16));
+    this.osc('sine', 110, 55, t, 0.65, 0.2);
+  }
+  lowHealth() {
+    if (!this.enabled || this.throttled('lowhp', 1600)) return;
+    const t = this.ctx.currentTime;
+    this.osc('sine', 80, 42, t, 0.16, 0.16);
+    this.osc('sine', 70, 38, t + 0.23, 0.13, 0.1);
+  }
+
   // ---------- 程序化配乐 ----------
   startMusic() {
     if (this.musicTimer) return;
@@ -235,6 +262,9 @@ export class AudioEngine {
   }
 
   schedule() {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    // 后台恢复只调度未来的节拍，禁止追赶数分钟的旧音符。
+    if (this.nextStepTime < this.ctx.currentTime - 0.3) this.nextStepTime = this.ctx.currentTime + 0.05;
     if (!this.enabled || this.muted) {
       // 静音时也要推进时钟，避免恢复时爆发
       while (this.nextStepTime < this.ctx.currentTime + 0.25) {
@@ -271,6 +301,7 @@ export class AudioEngine {
       const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1500;
       const gg = c.createGain(); gg.gain.setValueAtTime(0.11, t); gg.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
       src.connect(f); f.connect(gg); gg.connect(g); src.start(t); src.stop(t + 0.15);
+      src.onended = () => { src.disconnect(); f.disconnect(); gg.disconnect(); };
     }
     // Hat: 反拍 8 分（极轻）
     if (st % 2 === 1) {
@@ -278,6 +309,7 @@ export class AudioEngine {
       const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 9500;
       const gg = c.createGain(); gg.gain.setValueAtTime(0.024 + inten * 0.02, t); gg.gain.exponentialRampToValueAtTime(0.001, t + 0.035);
       src.connect(f); f.connect(gg); gg.connect(g); src.start(t); src.stop(t + 0.05);
+      src.onended = () => { src.disconnect(); f.disconnect(); gg.disconnect(); };
     }
     // Bass: 温暖三角波 + 低通
     const bassPat = [1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0];
@@ -288,6 +320,7 @@ export class AudioEngine {
       o.type = 'triangle'; o.frequency.value = root * 2;
       og.gain.setValueAtTime(0.17, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
       o.connect(fl); fl.connect(og); og.connect(g); o.start(t); o.stop(t + 0.26);
+      o.onended = () => { o.disconnect(); fl.disconnect(); og.disconnect(); };
     }
     // Pad: 每小节头（正弦+三角，慢起音，温暖铺底）
     if (st === 0) {
@@ -302,6 +335,7 @@ export class AudioEngine {
           og.gain.setValueAtTime(vol, t + dur - 0.6);
           og.gain.linearRampToValueAtTime(0.0001, t + dur);
           o.connect(og); og.connect(g); o.start(t); o.stop(t + dur + 0.05);
+          o.onended = () => { o.disconnect(); og.disconnect(); };
         }
       });
     }

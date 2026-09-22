@@ -264,7 +264,7 @@ check('主机大幅领先时客机可向前追帧', await B.evaluate(() => {
 check('房主后台冻结客机玩法且恢复时重建时钟基准', await B.evaluate(() => {
   const g = window.__DBG.game;
   const mp = g.mp;
-  mp._onMsg(0, { k: 'hostaway' });
+  mp._onMsg(mp.net.hostId, { k: 'hostaway' });
   const before = {
     time: g.time,
     x: g.player.pos.x,
@@ -279,7 +279,7 @@ check('房主后台冻结客机玩法且恢复时重建时钟基准', await B.ev
     && g.player.pos.z === before.z
     && g.weapons.timers.blaster === before.weaponT;
   g.player.vel.set(0, 0, 0);
-  mp._onMsg(0, { k: 'hostback' });
+  mp._onMsg(mp.net.hostId, { k: 'hostback' });
   return frozen && !mp.hostAway && !mp.clockSynced && mp.lastSnapAt === 0;
 }));
 
@@ -377,6 +377,102 @@ check('第二局队友状态已从首个心跳重建', await A.evaluate(() => {
   if (!peer || !peer.ready || peer.dead || !peer.remote.hasState) return false;
   return Math.hypot(peer.remote.mesh.position.x - peer.x, peer.remote.mesh.position.z - peer.z) < 3;
 }));
+check('第二局清空目标与重抽状态', await A.evaluate(() => {
+  const g = window.__DBG.game;
+  return g.reactor.captures === 0 && g.reactor.buffLeft === 0 && g.reactorRewardCycle === -1 && g.rerolls === 2;
+}));
+
+// 新机制：由真实主机帧推进目标，使用真实 relay 检查客机奖励和快照。
+for (const page of [A, B]) await page.evaluate(() => {
+  const g = window.__DBG.game;
+  g.player.pos.set(0, 0.75, 0); g.player.vel.set(0, 0, 0);
+  g.player.stats.hp = 50; g.player.stats.armor = 9999; g.pulse = 0;
+});
+await sleep(150);
+await A.evaluate(() => {
+  const g = window.__DBG.game;
+  g.enemies.reset(); g.enemies.spawnT = 9999;
+  g.time = 24; g.reactor.cycle = 0; g.reactor.charge = 6.99;
+});
+await sleep(600);
+for (const [tag, page] of [['主机', A], ['客机', B]]) {
+  check(`${tag}反应堆奖励与团队急速`, await page.evaluate(() => {
+    const g = window.__DBG.game;
+    return g.reactor.captures === 1 && g.reactor.buffLeft > 16 && g.player.stats.hp >= 68 && g.pulse === 25 && g.weapons.rateMul() === 1.25;
+  }));
+}
+await A.evaluate(() => {
+  const g = window.__DBG.game;
+  g.rewardReactor(0); g.mp.send({ k: 'reactorReward', cycle: 0 });
+});
+await sleep(200);
+check('重复目标消息不会重复回血或充能', await B.evaluate(() => {
+  const g = window.__DBG.game;
+  return g.player.stats.hp === 68 && g.pulse === 25;
+}));
+check('非房主不能伪造奖励或暂停世界', await B.evaluate(() => {
+  const g = window.__DBG.game;
+  g.mp._onMsg(g.net.id, { k: 'reactorReward', cycle: 999 });
+  g.mp._onMsg(g.net.id, { k: 'hostaway' });
+  return g.player.stats.hp === 68 && g.pulse === 25 && g.reactorRewardCycle === 0 && !g.mp.hostAway;
+}));
+await A.evaluate(() => {
+  const g = window.__DBG.game;
+  g.reactor.buffUntil = g.time - 1;
+  g.pickups.spawnSupply(40, 40, 0); g.pickups.spawnSupply(-40, -40, 1);
+});
+await sleep(300);
+check('增益到期在客机同步恢复基础射速', await B.evaluate(() => window.__DBG.game.weapons.rateMul() === 1));
+check('两个补给槽正确同步', await B.evaluate(() => window.__DBG.game.pickups.supplies.filter((s) => s.active).length === 2));
+await A.evaluate(() => {
+  const g = window.__DBG.game;
+  const s = g.pickups.supplies[0]; s.active = false; s.mesh.visible = false;
+  g.onSupplyTaken(s.x, s.z, { id: g.net.id, self: true }, 0);
+});
+await sleep(200);
+check('拾取一个补给不删除另一个', await B.evaluate(() => {
+  const s = window.__DBG.game.pickups.supplies;
+  return !s[0].active && s[1].active;
+}));
+await A.evaluate(() => { const s = window.__DBG.game.pickups.supplies[1]; s.landed = true; s.t = 23; });
+await sleep(300);
+check('补给过期不会在客机留下幽灵舱', await B.evaluate(() => window.__DBG.game.pickups.supplies.every((s) => !s.active)));
+
+const spawnedDamage = await A.evaluate(() => {
+  const g = window.__DBG.game;
+  const e = g.enemies.spawnNow('tank', 60, 60, true);
+  return { id: e.netId, damage: e.dmg };
+});
+await sleep(200);
+check('精英接触伤害包含主机成长倍率', await B.evaluate(({ id, damage }) => window.__DBG.game.enemies.list[id].dmg === damage, spawnedDamage));
+check('经验池满仍保留当前块经验', await A.evaluate(() => {
+  const g = window.__DBG.game;
+  const saved = g.pickups.gems.map((gem) => gem.active);
+  g.pickups.gems.forEach((gem) => { gem.active = true; });
+  let awarded = 0; const addXp = g.addXp;
+  g.addXp = (n) => { awarded += n; };
+  try { g.pickups.dropGems(0, 0, 13); } finally {
+    g.addXp = addXp; g.pickups.gems.forEach((gem, i) => { gem.active = saved[i]; });
+  }
+  return awarded === 13;
+}));
+await A.evaluate(() => window.__DBG.giveXp(12));
+await sleep(200);
+check('联机卡片不再用全屏遮罩挡住战斗', await B.evaluate(() => {
+  const g = window.__DBG.game, el = document.getElementById('levelup-screen');
+  return g.cardOpen && el.classList.contains('mp-cards') && getComputedStyle(el).pointerEvents === 'none';
+}));
+await B.keyboard.press('KeyR');
+await sleep(200);
+check('联机重抽消耗本局次数', await B.evaluate(() => window.__DBG.game.rerolls === 1));
+await B.keyboard.press('Digit1');
+await sleep(100);
+check('选卡后保留短暂无敌且继续战斗', await B.evaluate(() => {
+  const g = window.__DBG.game;
+  return g.state === 'playing' && !g.cardOpen && g.player.iFrames > 0;
+}));
+// 结束本轮专项测试，恢复死亡条件。
+for (const page of [A, B]) await page.evaluate(() => { window.__DBG.game.player.stats.armor = 0; });
 await B.evaluate(() => window.__DBG.hurt(99999));
 await sleep(300);
 await A.evaluate(() => window.__DBG.hurt(99999));

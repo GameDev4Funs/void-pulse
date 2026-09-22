@@ -1,7 +1,7 @@
 import { defaultWsUrl, Net, PROTOCOL_VERSION } from '../js/net.js';
 
-if (PROTOCOL_VERSION !== 3) {
-  throw new Error('场景碰撞与敌人导演变更后必须使用联机协议 v3');
+if (PROTOCOL_VERSION !== 4) {
+  throw new Error('反应堆与补给状态变更后必须使用联机协议 v4');
 }
 
 globalThis.location = {
@@ -41,3 +41,8 @@ if (sent.some((message) => message.v !== PROTOCOL_VERSION)) {
 }
 
 console.log('✓ WebSocket URL 协议与同源路由正确');
+net.dispatch(JSON.stringify({ t: 'created', id: 7, room: 'ROOM' }));
+if (net.hostId !== 7) throw new Error('created 没有记录房主身份');
+net.dispatch(JSON.stringify({ t: 'joined', id: 8, host: 7, room: 'ROOM' }));
+if (net.hostId !== 7 || net.isHost) throw new Error('joined 没有记录服务器房主身份');
+console.log('✓ 房主身份来自中继服务器的房间确认');

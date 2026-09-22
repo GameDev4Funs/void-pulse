@@ -19,6 +19,8 @@ import { Upgrades, UPGRADES } from './upgrades.js';
 import { UI } from './ui.js';
 import { Net, genRoomCode, genPassword, defaultWsUrl } from './net.js';
 import { MpSession } from './mp.js';
+import { Reactor, REACTOR } from './reactor.js';
+import { loadSettings, saveSettings } from './settings.js';
 
 const CAM_OFFSET = new THREE.Vector3(0, 28.5, 15.5);
 const MP_ARENA = 80;
@@ -51,7 +53,9 @@ export class Game {
     this.composer.addPass(new OutputPass());
 
     // —— 系统 ——
-    this.audio = new AudioEngine();
+    this.settings = loadSettings();
+    this.reactor = new Reactor();
+    this.audio = new AudioEngine(this.settings);
     this.input = new Input(this.renderer.domElement);
     this.input.onFirstGesture = () => { this.audio.init(); this.audio.resume(); };
     this.world = buildWorld(this.scene, ARENA);
@@ -355,6 +359,11 @@ export class Game {
     this.trauma = 0; this.slowT = 0; this.timeScale = 1;
     this.pendingLevels = 0; this.dyingT = 0;
     this.cardOpen = false;
+    this.rerolls = 2;
+    this.reactor.reset();
+    this.reactorRewardCycle = -1;
+    this.reactorNoticeCycle = -1;
+    this.ui?.closeSettings();
     if (this.mp) this.mp.resetRunState();
     this.chain = 0; this.chainT = 0;
     this.chainWindow = CHAIN.window; this.chainScoreMul = 1;
@@ -483,9 +492,9 @@ export class Game {
     }
   }
 
-  onSupplyTaken(x, z, pl) {
+  onSupplyTaken(x, z, pl, id) {
     const isSelf = !this.mp || pl.self;
-    if (this.mpIsHost()) this.mp.send({ k: 'supT', x: +x.toFixed(1), z: +z.toFixed(1), by: pl.id });
+    if (this.mpIsHost()) this.mp.send({ k: 'supT', id, x: +x.toFixed(1), z: +z.toFixed(1), by: pl.id });
     if (isSelf) this.player.heal(SUPPLY.heal);
     this.addScore(Math.round(SUPPLY.score * this.chainMul()));
     this.pickups.magnetAll();
@@ -543,6 +552,46 @@ export class Game {
     this.mpSendFx('ult', { x: +p.pos.x.toFixed(1), z: +p.pos.z.toFixed(1) });
   }
 
+  updateReactor(dt, isGuest) {
+    const r = this.reactor;
+    if (!isGuest) {
+      const enemies = this.enemies.list.filter((e) => e.active && !e.dying).map((e) => e.pos);
+      const captured = r.tick(this.time, dt, this.alivePlayerPositions(), enemies);
+      if (captured) {
+        this.addScore(400);
+        this.rewardReactor(r.cycle);
+        if (this.mpIsHost()) this.mp.send({ k: 'reactorReward', cycle: r.cycle });
+      }
+    }
+    if (r.phase === 'active' && this.reactorNoticeCycle !== r.cycle) {
+      this.reactorNoticeCycle = r.cycle;
+      this.ui.toast('反应堆上线 · 进入中央光环充能', '#ffd23e');
+      this.audio.reactorReady();
+    }
+  }
+
+  rewardReactor(cycle) {
+    if (cycle <= this.reactorRewardCycle) return;
+    this.reactorRewardCycle = cycle;
+    if (this.player.alive && !this.player.dead) {
+      const healed = this.player.heal(REACTOR.heal);
+      if (healed) this.texts.fire(this.player.pos.x, 1.8, this.player.pos.z, `+${Math.round(healed)}`, 'heal');
+    }
+    this.pulse = Math.min(PULSE.max, this.pulse + REACTOR.pulse);
+    this.ui.toast('能源解放！全队修复 +18 · 超载 +25 · 18秒急速', '#4dff88');
+    this.audio.reactorCapture();
+    this.shockwaves.fire(0, 0, 13, 0x4dff88, 1);
+    this.particles.burst(0, 1.5, 0, 36, 0x4dff88, { speed: 12, life: 0.8, size: 0.8 });
+  }
+
+  rerollCards() {
+    if (this.rerolls <= 0 || !(this.cardOpen || this.state === 'levelup')) return;
+    this.rerolls--;
+    this.pendingCards = this.upgrades.rollCards(3, this.pendingCards);
+    this.ui.showLevelUp(this.pendingCards, this.pendingCards.map((c) => this.upgrades.cardView(c)), (i) => this.pickCard(i));
+    this.audio.cardPick();
+  }
+
   enterLevelUp() {
     // 联机：非阻塞选卡（世界继续运转）
     if (this.mp) {
@@ -567,6 +616,7 @@ export class Game {
       const card = this.pendingCards && this.pendingCards[i];
       if (!card) return;
       this.upgrades.apply(card);
+      this.player.iFrames = Math.max(this.player.iFrames, 0.8);
       this.audio.cardPick();
       this.recountRoutes();
       this.pendingLevels--;
@@ -584,6 +634,7 @@ export class Game {
     const card = this.pendingCards[i];
     if (!card) return;
     this.upgrades.apply(card);
+    this.player.iFrames = Math.max(this.player.iFrames, 0.8);
     this.audio.cardPick();
     this.recountRoutes();
     this.pendingLevels--;
@@ -876,7 +927,7 @@ export class Game {
       this.ultBeam.rotation.y += rawDt * 6;
       if (this.ultBeamT <= 0) this.ultBeam.visible = false;
     }
-    this.world.update(this.state === 'paused' || this.state === 'levelup' ? 0 : dt, this.time);
+    this.world.update(this.state === 'paused' || this.state === 'levelup' ? 0 : dt, this.time, this.reactor);
     if (!this.bench) this.composer.render();
     this.input.endFrame();
   }
@@ -904,7 +955,9 @@ export class Game {
         if (this.chainT <= 0) this.chain = 0;
       }
     }
-    this.audio.intensity = clamp(0.25 + this.time / 240 + (this.enemies.bossActive ? 0.3 : 0), 0, 1);
+    const pace = this.enemies.paceAt(this.time);
+    this.audio.intensity = clamp(0.2 + Math.min(0.35, this.enemies.activeCount / 90) + (pace.phase === 'surge' ? 0.3 : 0) + (this.enemies.bossActive ? 0.3 : 0), 0, 1);
+    if (p.alive && !p.dead && p.stats.hp / p.stats.maxHp < 0.3) this.audio.lowHealth();
 
     // 蛛网与场地放电都会影响走位；放电按主客机共享的游戏时钟确定。
     const inArenaHazard = this.world.hazardAt(p.pos.x, p.pos.z);
@@ -990,6 +1043,7 @@ export class Game {
     this.weapons.update(dt);
     if (!isGuest) this.pickups.update(dt);
     this.checkPlayerCollisions();
+    this.updateReactor(dt, isGuest);
 
     // 超载
     if ((this.input.justPressed('KeyQ') || this.input.justPressed('MouseRight'))) this.activatePulse();
@@ -1020,7 +1074,7 @@ export class Game {
     const info = this.world.hazardInfo;
     if (info.phase === 'warning' && info.cycle !== this.arenaEventSeen) {
       this.arenaEventSeen = info.cycle;
-      this.ui.toast('⚠ 能源通道即将放电 —— 离开红色区域', '#ffb13e');
+      this.ui.toast('⚠ 能源通道即将放电 —— 离开橙色区域', '#ffb13e');
       this.audio.bossWarn();
     }
     if (info.phase !== 'active' || !inside || !this.player.alive || this.player.dead) {
@@ -1096,7 +1150,7 @@ export class Game {
 
   updateAim() {
     const p = this.player;
-    if (this.input.usingMouse && !this.input.isTouch) {
+    if (!this.settings.autoAim && this.input.usingMouse && !this.input.isTouch) {
       this._ndc.set((this.input.mouseX / innerWidth) * 2 - 1, -(this.input.mouseY / innerHeight) * 2 + 1);
       this._raycaster.setFromCamera(this._ndc, this.camera);
       const hit = this._raycaster.ray.intersectPlane(this._plane, p.aimPoint);
@@ -1167,7 +1221,7 @@ export class Game {
       return;
     }
     const p = this.player;
-    const shake = this.trauma * this.trauma;
+    const shake = this.settings.reducedMotion ? 0 : this.trauma * this.trauma;
     this.trauma = Math.max(0, this.trauma - rawDt * 1.7);
     const t = performance.now() / 1000;
 
@@ -1196,6 +1250,16 @@ export class Game {
 
   handleGlobalKeys() {
     const inp = this.input;
+    if (this.ui.settingsOpen) {
+      if (inp.justPressed('Escape')) this.ui.closeSettings();
+      return;
+    }
+    if (inp.justPressed('KeyF') && !this.input.isTouch) {
+      this.settings.autoAim = !this.settings.autoAim;
+      saveSettings(this.settings);
+      this.ui.toast(this.settings.autoAim ? '自动瞄准已开启' : '鼠标瞄准已开启', '#2ee6ff');
+    }
+    if (inp.justPressed('KeyR') && (this.cardOpen || this.state === 'levelup')) this.rerollCards();
     if (inp.justPressed('KeyM')) {
       this.audio.setMuted(!this.audio.muted);
       this.ui.setMuted(this.audio.muted);

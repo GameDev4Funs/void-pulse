@@ -15,6 +15,7 @@ export class Input {
     this.onFirstGesture = null;
 
     addEventListener('keydown', (e) => {
+      if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
       if (e.repeat) return;
       this.keys.add(e.code);
       this.pressed.add(e.code);
@@ -22,7 +23,7 @@ export class Input {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
-    addEventListener('blur', () => this.keys.clear());
+    addEventListener('blur', () => this.clear());
 
     addEventListener('mousemove', (e) => {
       this.mouseX = e.clientX; this.mouseY = e.clientY;
@@ -92,6 +93,15 @@ export class Input {
     };
     bindBtn('btn-dash', 'Space');
     bindBtn('btn-pulse', 'KeyQ');
+    bindBtn('btn-ult', 'KeyE');
+  }
+
+  clear() {
+    this.keys.clear(); this.pressed.clear();
+    this.mouseDown = false; this.rightDown = false;
+    this.joy.active = false; this.joy.id = -1; this.joy.x = 0; this.joy.y = 0;
+    const base = document.getElementById('stick-base');
+    if (base) base.style.display = 'none';
   }
 
   // 移动向量（已归一化）

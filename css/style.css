@@ -12,6 +12,68 @@
 html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); font-family: var(--font); }
 #app, #app canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .hidden { display: none !important; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
+button:disabled { opacity: .4; cursor: default; }
+
+/* ---------- 战术界面 / 驾驶舱 ---------- */
+.eyebrow { font-size: 9px; letter-spacing: 2px; color: #6c9faf; margin-bottom: 7px; }
+#objective { position: absolute; left: 20px; bottom: 106px; width: 268px; padding: 13px 15px;
+  background: linear-gradient(120deg,rgba(8,20,31,.93),rgba(8,20,31,.66)); border-left: 2px solid #ba9436; border-radius: 0 8px 8px 0; }
+#objective-title { font-size: 16px; font-weight: 700; color: #ffe3a0; }
+#objective .bar { height: 4px; margin: 9px 0; border: 0; }
+#objective-detail { font-size: 11px; line-height: 1.6; color: #b1c8d2; }
+#wave-status { font-size: 11px; margin-top: 9px; color: #d5eaff; }
+#radar-wrap { position: absolute; right: 20px; bottom: 68px; padding: 9px; background: #07111ddd; border: 1px solid #274858; border-radius: 8px; }
+#radar { width: 142px; height: 142px; display: block; }
+#aim-mode { font-size: 10px; color: #7eb7c9; margin-top: 5px; text-align: center; }
+#field-hint { position: absolute; bottom: 102px; left: 50%; transform: translateX(-50%); width: min(500px,45vw); text-align: center; font-size: 12px; color: #c5dce6; text-shadow: 0 2px 4px #000; }
+.utility-btn { position: fixed; z-index: 36; right: 20px; bottom: 22px; border: 1px solid #335163; background: #0b1825dd; border-radius: 5px; color: #c2d9e3; padding: 7px 12px; font-size: 12px; }
+#settings-screen { z-index: 70; }
+.settings-panel { width: min(440px,90vw); text-align: left; }
+.settings-panel h2 { font-size: 26px; color: #d9f7ff; }
+.settings-panel p { margin: 10px 0 24px; font-size: 12px; color: #7ca3b4; }
+.settings-panel label { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 14px 0; font-size: 14px; color: #cadce6; }
+.settings-panel input { accent-color: var(--cyan); cursor: pointer; }
+.settings-panel input[type=range] { width: 150px; }
+.settings-panel input[type=checkbox] { width: 20px; height: 20px; }
+.settings-panel .big-btn { width: 100%; margin-top: 20px; font-size: 16px; }
+.settings-panel input:disabled { opacity: .45; cursor: default; }
+#reroll-btn { margin-top: 16px; padding: 9px 20px; color: #b6d9e9; background: #0b1925; }
+#levelup-screen.mp-cards { inset: auto 0 80px; background: none; backdrop-filter: none; pointer-events: none; padding: 0 12px; }
+.mp-cards #levelup-title { font-size: 17px; margin-bottom: 4px; }
+.mp-cards #levelup-sub { font-size: 11px; margin-bottom: 10px; text-shadow: 0 1px 4px #000; }
+.mp-cards #cards { gap: 10px; flex-wrap: nowrap; }
+.mp-cards .card { width: 210px; min-height: 152px; padding: 12px; background: rgba(7,16,28,.94); pointer-events: auto; }
+.mp-cards .c-icon { display: none; }
+.mp-cards .c-name { font-size: 16px; margin-top: 4px; }
+.mp-cards .c-desc { font-size: 11px; margin-top: 7px; }
+.mp-cards #reroll-btn { pointer-events: auto; margin-top: 8px; }
+#btn-ult { right: 108px; bottom: 40px; border-color: #c77bff; color: #c77bff; }
+.lr-code { user-select: text; -webkit-user-select: text; }
+@media (max-width: 760px) {
+  #objective { left: 10px; bottom: 100px; width: 210px; padding: 8px 10px; }
+  #objective-title { font-size: 13px; }
+  #objective-detail, #wave-status { font-size: 10px; }
+  #radar-wrap { right: 10px; bottom: 125px; padding: 5px; }
+  #radar { width: 90px; height: 90px; }
+  #radar-wrap .eyebrow { display: none; }
+  #field-hint { display: none; }
+  #levelup-screen.mp-cards { bottom: 110px; }
+  .mp-cards .card { width: 30vw; min-height: 140px; padding: 8px; }
+  .mp-cards .c-name { font-size: 13px; }
+  .mp-cards .c-desc { font-size: 10px; }
+  .utility-btn { bottom: 14px; right: 10px; }
+  #hud #level-badge { top: 45px; left: 50%; right: auto; transform: translateX(-50%); }
+  #hud #hud-center { top: 98px; width: 94vw; }
+  #hud #sector-label { display: none; }
+}
+@media (pointer: coarse) {
+  #hud #objective { top: 128px; bottom: auto; width: min(210px,55vw); }
+  #hud #radar-wrap { top: 128px; bottom: auto; }
+  #hud #hud-bottom { bottom: 210px; }
+  #hud #hud-hints { display: none; }
+}
 
 /* ---------- 全屏特效 ---------- */
 #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 5;
@@ -102,7 +164,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 
 /* ---------- 覆盖层 / 菜单 ---------- */
 .overlay { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; background: rgba(3,4,12,.72); backdrop-filter: blur(6px); }
+  align-items: center; justify-content: safe center; overflow-y: auto; padding: 24px 0; background: rgba(3,4,12,.72); backdrop-filter: blur(6px); }
 #title-screen { background: radial-gradient(ellipse at 50% 120%, rgba(46,230,255,.10), transparent 55%),
   radial-gradient(ellipse at 50% -20%, rgba(255,62,165,.10), transparent 55%), rgba(3,4,12,.66); }
 .title-core { text-align: center; animation: fadeUp .8s ease-out; max-width: 720px; padding: 0 24px; }

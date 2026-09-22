@@ -60,13 +60,18 @@
     </div>
   </div>
   <div id="hud-hints">ESC 暂停 · M 静音 · SPACE 冲刺 · Q 超载 · E 湮灭</div>
+  <div id="objective"><div class="eyebrow">REACTOR / 战场目标</div><div id="objective-title"></div><div class="bar"><div id="objective-fill"></div></div><div id="objective-detail"></div><div id="wave-status"></div></div>
+  <div id="radar-wrap"><div class="eyebrow">TACTICAL / N ↑</div><canvas id="radar" width="160" height="160" aria-label="战术小地图"></canvas><div id="aim-mode"></div></div>
+  <div id="field-hint"></div>
 </div>
+<button id="settings-btn" class="utility-btn" aria-label="打开设置">设置 ⚙</button>
 
 <!-- 触屏控件 -->
 <div id="touch-ui" class="hidden">
   <div id="stick-zone"><div id="stick-base"><div id="stick-nub"></div></div></div>
   <div id="btn-dash" class="touch-btn">⇢</div>
   <div id="btn-pulse" class="touch-btn">Q</div>
+  <div id="btn-ult" class="touch-btn">E</div>
 </div>
 
 <!-- 标题画面 -->
@@ -74,7 +79,7 @@
   <div class="title-core">
     <div id="game-logo">VOID<span>PULSE</span></div>
     <div id="game-sub">霓 虹 深 渊 · 幸 存 者</div>
-    <div class="title-desc">异空间虫群已突破防线。驾驶幽灵战机，在无尽的霓虹兽潮中活下来。<br>击杀 → 拾取碎片 → 选流派叠 Combo → 进化武器 → 超载清场。单人或组队都行。</div>
+    <div class="title-desc">夺取反应堆，穿越放电带，在虫潮中守住最后的能源站。<br>构筑流派 · 进化武器 · 团队急速 —— 每一次回到中心，都是一次反击。</div>
     <div class="title-btns">
       <div id="start-btn" class="big-btn">单 机 出 击</div>
       <div id="mp-btn" class="big-btn big-btn-alt">组 队 联 机</div>
@@ -101,7 +106,7 @@
     </div>
     <div class="controls-grid">
       <div><b>WASD / 方向键</b><span>移动</span></div>
-      <div><b>鼠标</b><span>瞄准（自动开火）</span></div>
+      <div><b>F / 鼠标</b><span>切换自动 / 手动瞄准</span></div>
       <div><b>SPACE / SHIFT</b><span>冲刺（无敌帧）</span></div>
       <div><b>Q / 右键</b><span>超载冲击波</span></div>
       <div><b>E</b><span>湮灭协议（碎片充能）</span></div>
@@ -143,6 +148,19 @@
   <div id="levelup-title">⬡ 系统升级 ⬡</div>
   <div id="levelup-sub">选择一项强化 &nbsp;<span class="key-hint">按 1 / 2 / 3 或点击</span></div>
   <div id="cards"></div>
+  <button id="reroll-btn" class="small-btn">重抽 [R] · 2 次</button>
+</div>
+
+<div id="settings-screen" class="overlay hidden">
+  <div class="panel settings-panel">
+    <div class="eyebrow">PILOT CONFIGURATION</div><h2>驾驶舱设置</h2>
+    <p id="settings-note">设置自动保存到此设备</p>
+    <label>背景音乐 <input id="music-volume" type="range" min="0" max="100" aria-label="背景音乐音量"></label>
+    <label>战斗音效 <input id="sfx-volume" type="range" min="0" max="100" aria-label="战斗音效音量"></label>
+    <label>自动瞄准 <input id="auto-aim" type="checkbox"></label>
+    <label>减少震屏与闪光 <input id="reduced-motion" type="checkbox"></label>
+    <button id="settings-close" class="big-btn">返回游戏 / 菜单</button>
+  </div>
 </div>
 
 <!-- 暂停 -->

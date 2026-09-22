@@ -170,7 +170,7 @@ export class Weapons {
     return Math.round(base * s.dmgMul * this.game.routeFx.dmg * (crit ? s.critMul : 1));
   }
   rateMul() {
-    return this.game.player.stats.rateMul * this.game.routeFx.rate;
+    return this.game.player.stats.rateMul * this.game.routeFx.rate * (this.game.reactor.buffLeft > 0 ? 1.25 : 1);
   }
 
   // ============ 更新 ============

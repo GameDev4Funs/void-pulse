@@ -8,6 +8,7 @@ const SNAP_RATE = 0.1;       // 世界快照 10Hz
 const POS_RATE = 1 / 20;     // 玩家位置 20Hz，消息小且直接影响操作观感
 const DMG_RATE = 1 / 30;     // 伤害事件按帧批量冲刷，避免高射速时产生大量小包
 const MAX_EXTRAPOLATION = 0.12;
+const HOST_EVENTS = new Set(['begin', 'snap', 'tele', 'sp', 'de', 'eb', 'ceb', 'web', 'gd', 'gp', 'hd', 'hpk', 'sup', 'supT', 'reactorReward', 'lv', 'ts', 'gov', 'blast', 'hostaway', 'hostback']);
 
 // —— 队友战机（渲染 + 名牌，无本地逻辑）——
 class RemotePlayer {
@@ -257,6 +258,8 @@ export class MpSession {
   _onMsg(from, d) {
     const g = this.game;
     if (!d || !d.k) return;
+    // relay 的 from 由服务器填写，客机不能冒充房主发奖励/快照/开局事件。
+    if (HOST_EVENTS.has(d.k) && from !== this.net.hostId) return;
     switch (d.k) {
       case 'p': { // 位置心跳
         const p = this.peers.get(from);
@@ -273,7 +276,7 @@ export class MpSession {
       case 'begin': g.startMp(); break;
       case 'snap': if (!this.isHost) this._applySnap(d); break;
       case 'tele': if (!this.isHost) g.enemies.netTelegraph(d.ty, d.x, d.z, d.el, d.du); break;
-      case 'sp': if (!this.isHost) g.enemies.spawnNet(d.id, d.ty, d.x, d.z, d.el, d.gn); break;
+      case 'sp': if (!this.isHost) g.enemies.spawnNet(d.id, d.ty, d.x, d.z, d.el, d.gn, d.dm); break;
       case 'de': if (!this.isHost) this._onEnemyDeath(d); break;
       case 'eb': if (!this.isHost) g.enemies.fireEBullet(d.x, d.z, d.dx, d.dz, d.sp, d.dm); break;
       case 'ceb': if (!this.isHost) g.enemies.clearEBullets(); break;
@@ -282,8 +285,9 @@ export class MpSession {
       case 'gp': if (!this.isHost) this._onGemPicked(d); break;
       case 'hd': if (!this.isHost) g.pickups.netDropHeart(d.id, d.x, d.z); break;
       case 'hpk': if (!this.isHost) this._onHeartPicked(d); break;
-      case 'sup': if (!this.isHost) g.pickups.spawnSupply(d.x, d.z); break;
+      case 'sup': if (!this.isHost) g.pickups.spawnSupply(d.x, d.z, d.id); break;
       case 'supT': if (!this.isHost) this._onSupplyTaken(d); break;
+      case 'reactorReward': if (!this.isHost) g.rewardReactor(d.cycle); break;
       case 'lv': if (!this.isHost) { g.pendingLevels++; } break;
       case 'ts': if (!this.isHost) g.ui.toast(d.txt, d.c); break;
       case 'dmg': if (this.isHost) this._applyDmgEvents(d.list); break;
@@ -328,6 +332,8 @@ export class MpSession {
       this.send({
         k: 'snap', tm: +g.time.toFixed(2), sc: Math.floor(g.score), ch: g.chain, sec: g.sector,
         xp: g.player.xp, lv: g.player.level, en, gm,
+        rc: g.reactor.snapshot(),
+        su: g.pickups.supplies.flatMap((s, i) => s.active ? [[i, +s.x.toFixed(1), +s.z.toFixed(1), +s.t.toFixed(1), s.landed ? 1 : 0]] : []),
         bhp: g.enemies.bossActive ? +(g.enemies.bossActive.hp / g.enemies.bossActive.maxHp).toFixed(2) : -1,
       });
     }
@@ -351,13 +357,13 @@ export class MpSession {
 
   // 主机事件转发
   evTelegraph(ty, x, z, el, du) { this.send({ k: 'tele', ty, x: +x.toFixed(1), z: +z.toFixed(1), el: el ? 1 : 0, du }); }
-  evSpawn(e, id) { this.send({ k: 'sp', id, gn: e.generation, ty: e.type, x: +e.pos.x.toFixed(1), z: +e.pos.z.toFixed(1), el: e.elite ? 1 : 0 }); }
+  evSpawn(e, id) { this.send({ k: 'sp', id, gn: e.generation, ty: e.type, x: +e.pos.x.toFixed(1), z: +e.pos.z.toFixed(1), el: e.elite ? 1 : 0, dm: e.dmg }); }
   evDeath(e, id) { this.send({ k: 'de', id, gn: e.generation, ty: e.type, x: +e.pos.x.toFixed(1), z: +e.pos.z.toFixed(1), el: e.elite ? 1 : 0 }); }
   evEBullet(x, z, dx, dz, sp, dm) { this.send({ k: 'eb', x: +x.toFixed(1), z: +z.toFixed(1), dx: +dx.toFixed(2), dz: +dz.toFixed(2), sp, dm: Math.round(dm) }); }
   evWeb(x, z) { this.send({ k: 'web', x: +x.toFixed(1), z: +z.toFixed(1) }); }
   evGemDrop(g, id) { this.send({ k: 'gd', id, x: +g.pos.x.toFixed(1), z: +g.pos.z.toFixed(1), v: g.value }); }
   evHeartDrop(h, id) { this.send({ k: 'hd', id, x: +h.pos.x.toFixed(1), z: +h.pos.z.toFixed(1) }); }
-  evSupply(x, z) { this.send({ k: 'sup', x: +x.toFixed(1), z: +z.toFixed(1) }); }
+  evSupply(x, z, id) { this.send({ k: 'sup', id, x: +x.toFixed(1), z: +z.toFixed(1) }); }
   evToast(txt, c) { this.send({ k: 'ts', txt, c }); }
 
   // ============ 客机：快照应用 ============
@@ -372,6 +378,18 @@ export class MpSession {
     this.hostTime = d.tm;
     g.score = d.sc; g.chain = d.ch; g.sector = d.sec;
     g.player.xp = d.xp; g.player.level = d.lv;
+    if (d.rc) Object.assign(g.reactor, d.rc);
+    const supplyIds = new Set();
+    for (const [id, x, z, t, landed] of d.su || []) {
+      const supply = g.pickups.supplies[id];
+      if (!supply) continue;
+      supplyIds.add(id);
+      if (!supply.active) g.pickups.spawnSupply(x, z, id);
+      supply.t = t; supply.landed = !!landed;
+    }
+    g.pickups.supplies.forEach((s, i) => {
+      if (!supplyIds.has(i)) { s.active = false; s.mesh.visible = false; }
+    });
     const sampleDt = this.lastSnapAt ? clamp(now - this.lastSnapAt, 0.05, 0.25) : SNAP_RATE;
     this.lastSnapAt = now;
     const seen = new Set();
@@ -404,6 +422,7 @@ export class MpSession {
       }
     }
     // 宝石目标
+    g.enemies.activeCount = seen.size;
     const seenG = new Set();
     for (const [id, x, z] of d.gm) {
       seenG.add(id);
@@ -472,7 +491,8 @@ export class MpSession {
 
   _onSupplyTaken(d) {
     const g = this.game;
-    for (const s of g.pickups.supplies) if (s.active) { s.active = false; s.mesh.visible = false; }
+    const s = g.pickups.supplies[d.id];
+    if (s) { s.active = false; s.mesh.visible = false; }
     if (d.by === this.net.id) g.player.heal(20);
     g.audio.heart();
     g.shockwaves.fire(d.x, d.z, 4, 0xffd23e, 0.6);

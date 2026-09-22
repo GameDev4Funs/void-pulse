@@ -1,12 +1,17 @@
 // ============ UI：HUD / 菜单 / 升级卡牌 ============
 import { formatTime, formatNum, clamp } from './utils.js';
 import { XP_CURVE, PLAYER, ROUTES, ULT } from './config.js';
+import { TacticalHud } from './tactical_hud.js';
+import { saveSettings } from './settings.js';
 
 const $ = (id) => document.getElementById(id);
+const escapeText = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export class UI {
   constructor(game) {
     this.game = game;
+    this.tactical = new TacticalHud(game);
+    this.settingsOpen = false;
     this.el = {
       hud: $('hud'), hpFill: $('hp-fill'), hpNum: $('hp-num'),
       xpFill: $('xp-fill'), levelNum: $('level-num'),
@@ -60,6 +65,16 @@ export class UI {
   }
 
   bind(callbacks) {
+    $('reroll-btn').addEventListener('click', () => this.game.rerollCards());
+    $('settings-btn').addEventListener('click', () => this.openSettings());
+    $('settings-close').addEventListener('click', () => this.closeSettings());
+    for (const [id, key] of [['music-volume', 'music'], ['sfx-volume', 'sfx'], ['auto-aim', 'autoAim'], ['reduced-motion', 'reducedMotion']]) {
+      $(id).addEventListener('input', () => {
+        this.game.settings[key] = $(id).type === 'range' ? Number($(id).value) / 100 : $(id).checked;
+        saveSettings(this.game.settings);
+        this.game.audio.setVolumes();
+      });
+    }
     this.el.startBtn.addEventListener('click', callbacks.onStart);
     this.el.resumeBtn.addEventListener('click', callbacks.onResume);
     this.el.quitBtn.addEventListener('click', callbacks.onQuit);
@@ -86,7 +101,13 @@ export class UI {
     this.el.lobbyQuitBtn.addEventListener('click', () => this.game.quitToTitle());
     // 点击复制房名/密码
     const copy = (el) => el.addEventListener('click', () => {
-      if (navigator.clipboard && el.textContent) navigator.clipboard.writeText(el.textContent).then(() => this.toast('已复制', '#4dff88'));
+      const fallback = () => {
+        const range = document.createRange(); range.selectNodeContents(el);
+        const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        this.toast('已选中，请按 Ctrl/Cmd+C 复制', '#4dff88');
+      };
+      if (navigator.clipboard && el.textContent) navigator.clipboard.writeText(el.textContent).then(() => this.toast('已复制', '#4dff88')).catch(fallback);
+      else fallback();
     });
     copy(this.el.lobbyRoom); copy(this.el.lobbyPass);
   }
@@ -95,6 +116,7 @@ export class UI {
 
   // ---------- 大厅 ----------
   showLobby(isHost, room, pass, roster) {
+    $('touch-ui').classList.add('hidden');
     this.el.title.classList.add('hidden');
     this.el.gameover.classList.add('hidden');
     this.el.lobby.classList.remove('hidden');
@@ -110,7 +132,7 @@ export class UI {
   lobbyRefresh(roster, isHost) {
     if (!this.el.lobby.classList.contains('hidden')) {
       this.el.lobbyPlayers.innerHTML = roster.map((p) =>
-        `<div class="lobby-player"><span>${p.name}</span><span>${p.host ? '房主' : '就绪'}</span></div>`
+        `<div class="lobby-player"><span>${escapeText(p.name)}</span><span>${p.host ? '房主' : '就绪'}</span></div>`
       ).join('');
     }
   }
@@ -130,13 +152,15 @@ export class UI {
       <div class="st"><span>存活时间</span><b>${formatTime(stats.time)}</b></div>
       <div class="st"><span>击杀</span><b>${formatNum(stats.kills)}</b></div>
       <div class="st"><span>团队等级</span><b>${stats.level}</b></div>
-      <div class="st"><span>抵达区域</span><b>SECTOR ${stats.sector}</b></div>`;
+      <div class="st"><span>抵达区域</span><b>SECTOR ${stats.sector}</b></div>
+      <div class="st"><span>夺取反应堆</span><b>${this.game.reactor.captures}</b></div>`;
     this.el.retryBtn.textContent = '返回大厅 [R]';
     this.respawnOverlay(false);
   }
 
   // ---------- 屏幕切换 ----------
   showTitle(best) {
+    $('touch-ui').classList.add('hidden');
     this.el.title.classList.remove('hidden');
     this.el.hud.classList.add('hidden');
     this.el.gameover.classList.add('hidden');
@@ -148,6 +172,7 @@ export class UI {
     this.el.titleBest.textContent = best > 0 ? `最高纪录 ${formatNum(best)}` : '暂无纪录 —— 去创造历史吧';
   }
   showHud() {
+    $('touch-ui').classList.toggle('hidden', !this.game.input.isTouch);
     this.el.title.classList.add('hidden');
     this.el.hud.classList.remove('hidden');
     this.el.gameover.classList.add('hidden');
@@ -156,6 +181,10 @@ export class UI {
   showPause(show) { this.el.pause.classList.toggle('hidden', !show); }
 
   showLevelUp(cards, views, onPick) {
+    this.el.levelup.classList.toggle('mp-cards', !!this.game.mp);
+    $('levelup-sub').firstChild.textContent = this.game.mp ? '战斗继续 · 选卡后获得短暂无敌 ' : '选择一项强化 ';
+    $('reroll-btn').textContent = `重抽 [R] · ${this.game.rerolls} 次${views.some((v) => v.cls === 'r-evolve') ? ' · 保留进化机会' : ''}`;
+    $('reroll-btn').disabled = this.game.rerolls <= 0;
     this.el.levelup.classList.remove('hidden');
     const wrap = this.el.cards;
     wrap.innerHTML = '';
@@ -183,6 +212,31 @@ export class UI {
   }
   hideLevelUp() { this.el.levelup.classList.add('hidden'); }
 
+  openSettings() {
+    if (this.settingsOpen) return;
+    this.settingsOpen = true;
+    this.settingsPaused = !this.game.mp && this.game.state === 'playing';
+    if (this.settingsPaused) this.game.togglePause(true);
+    this.game.input.clear();
+    const s = this.game.settings;
+    $('music-volume').value = s.music * 100; $('sfx-volume').value = s.sfx * 100;
+    $('auto-aim').checked = s.autoAim; $('reduced-motion').checked = s.reducedMotion;
+    $('auto-aim').disabled = this.game.input.isTouch;
+    if (this.game.input.isTouch) $('auto-aim').checked = true;
+    $('settings-note').textContent = this.game.mp && this.game.state === 'playing' ? '联机不会暂停，请先找到安全位置' : '设置自动保存到此设备';
+    $('settings-screen').classList.remove('hidden');
+    $('settings-close').focus();
+  }
+  closeSettings() {
+    if (!this.settingsOpen) return;
+    this.settingsOpen = false;
+    $('settings-screen').classList.add('hidden');
+    this.game.input.clear();
+    if (this.settingsPaused && this.game.state === 'paused') this.game.togglePause();
+    this.settingsPaused = false;
+    document.activeElement?.blur();
+  }
+
   showGameOver(stats, isBest) {
     this.el.gameover.classList.remove('hidden');
     this.el.goNewBest.classList.toggle('hidden', !isBest);
@@ -192,18 +246,20 @@ export class UI {
       <div class="st"><span>存活时间</span><b>${formatTime(stats.time)}</b></div>
       <div class="st"><span>击杀</span><b>${formatNum(stats.kills)}</b></div>
       <div class="st"><span>等级</span><b>${stats.level}</b></div>
-      <div class="st"><span>抵达区域</span><b>SECTOR ${stats.sector}</b></div>`;
+      <div class="st"><span>抵达区域</span><b>SECTOR ${stats.sector}</b></div>
+      <div class="st"><span>夺取反应堆</span><b>${this.game.reactor.captures}</b></div>`;
   }
 
   // ---------- 每帧 HUD ----------
   update(dt) {
+    this.tactical.update(dt);
     const g = this.game, p = g.player;
     // HP
     const hpF = clamp(p.hpFrac, 0, 1);
     this.el.hpFill.style.transform = `scaleX(${hpF})`;
     this.el.hpFill.className = hpF > 0.35 ? 'hp-ok' : '';
     this.el.hpFill.id = 'hp-fill';
-    this.el.hpNum.textContent = `${Math.ceil(p.stats.hp)} / ${p.stats.maxHp}`;
+    this.el.hpNum.textContent = `${Math.max(0, Math.ceil(p.stats.hp))} / ${p.stats.maxHp}`;
     // XP
     const need = XP_CURVE(p.level);
     this.el.xpFill.style.transform = `scaleX(${clamp(p.xp / need, 0, 1)})`;
@@ -249,7 +305,7 @@ export class UI {
         let html = '';
         for (const p of g.mp.peers.values()) {
           const f = clamp(p.hp / (p.maxHp || 100), 0, 1);
-          html += `<div class="roster-row${p.dead ? ' dead' : ''}"><span class="rr-name">${p.name}</span><div class="rr-bar"><div class="rr-fill" style="transform:scaleX(${f})"></div></div></div>`;
+          html += `<div class="roster-row${p.dead ? ' dead' : ''}"><span class="rr-name">${escapeText(p.name)}</span><div class="rr-bar"><div class="rr-fill" style="transform:scaleX(${f})"></div></div></div>`;
         }
         this.el.roster.innerHTML = html;
       }
@@ -289,6 +345,7 @@ export class UI {
   }
 
   flash(opacity = 0.55, ms = 90) {
+    if (this.game.settings.reducedMotion) return;
     this.el.flash.style.transition = 'none';
     this.el.flash.style.opacity = opacity;
     requestAnimationFrame(() => {

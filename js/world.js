@@ -321,6 +321,34 @@ export function buildWorld(scene, arenaSize) {
   beam.position.y = 15;
   root.add(beam);
 
+  // 可交互区域与装饰明确分层：地面光环不参与碰撞。
+  const captureRing = new THREE.Mesh(new THREE.RingGeometry(5.8, 6, 80), new THREE.MeshBasicMaterial({
+    color: 0xffd23e, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false,
+  }));
+  captureRing.rotation.x = -Math.PI / 2;
+  captureRing.position.y = 0.13;
+  root.add(captureRing);
+  const progressRing = new THREE.Mesh(new THREE.RingGeometry(6.15, 6.38, 80), new THREE.MeshBasicMaterial({
+    color: 0x4dff88, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false,
+  }));
+  progressRing.rotation.x = -Math.PI / 2;
+  progressRing.position.y = 0.14;
+  root.add(progressRing);
+  const guideMat = new THREE.MeshBasicMaterial({ color: 0x2ee6ff, transparent: true, opacity: 0.24 });
+  const guideGeo = new THREE.PlaneGeometry(0.22, 1.3);
+  const guides = new THREE.InstancedMesh(guideGeo, guideMat, 4 * Math.max(0, Math.ceil((ARENA - 15) / 4)));
+  const guidePose = new THREE.Object3D();
+  let guideIndex = 0;
+  for (let axis = 0; axis < 4; axis++) {
+    const angle = axis * Math.PI / 2;
+    for (let d = 10; d < ARENA - 5; d += 4) {
+      guidePose.rotation.set(-Math.PI / 2, 0, -angle);
+      guidePose.position.set(Math.sin(angle) * d, 0.04, Math.cos(angle) * d);
+      guidePose.updateMatrix(); guides.setMatrixAt(guideIndex++, guidePose.matrix);
+    }
+  }
+  root.add(guides);
+
   let t = 0;
   return {
     root, reactor, stars, facility, colliders, coverMeshes, hazardInfo,
@@ -394,7 +422,7 @@ export function buildWorld(scene, arenaSize) {
         ? Math.abs(Math.abs(x) - offset) <= halfWidth
         : Math.abs(Math.abs(z) - offset) <= halfWidth;
     },
-    update(dt, gameTime = 0) {
+    update(dt, gameTime = 0, objective) {
       t += dt;
       core.rotation.y += dt * 0.8;
       core.rotation.x += dt * 0.3;
@@ -404,6 +432,15 @@ export function buildWorld(scene, arenaSize) {
       coreMat.emissiveIntensity = 1.8 + Math.sin(t * 2.4) * 0.5;
       stars.rotation.y += dt * 0.004;
       beam.material.opacity = 0.07 + Math.sin(t * 1.8) * 0.035;
+      const charging = objective?.phase === 'active';
+      const boosted = objective?.buffLeft > 0;
+      const color = boosted ? 0x4dff88 : charging ? 0xffd23e : 0x2ee6ff;
+      coreMat.emissive.setHex(color); ringMat.color.setHex(color); ring2.material.color.setHex(color);
+      beamMat.color.setHex(color);
+      captureRing.material.color.setHex(color);
+      captureRing.material.opacity = charging ? 0.55 + Math.sin(t * 4) * 0.2 : boosted ? 0.5 : 0.12;
+      progressRing.visible = charging;
+      progressRing.geometry.setDrawRange(0, Math.floor((objective?.charge || 0) / 7 * 80) * 6);
       coverMeshes.forEach((group, i) => {
         const ring = group.children[2] || group.children[1];
         if (ring) ring.material.opacity = 0.58 + Math.sin(t * 2.2 + i) * 0.22;

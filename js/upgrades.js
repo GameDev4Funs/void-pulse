@@ -185,13 +185,16 @@ export class Upgrades {
     );
   }
 
-  rollCards(n = 3) {
+  rollCards(n = 3, previous = []) {
     const g = this.game;
-    const pool = this.available();
+    const all = this.available();
+    const fresh = all.filter((u) => !previous?.some((p) => p.id === u.id));
+    const pool = fresh.length >= n ? fresh : all;
     const cards = [];
     // 有可用进化 → 首槽必出
     const evos = this.availableEvolutions();
-    if (evos.length > 0) cards.push(pick(evos));
+    const freshEvos = evos.filter((u) => !previous?.some((p) => p.id === u.id));
+    if (evos.length > 0) cards.push(pick(freshEvos.length ? freshEvos : evos));
     const weights = pool.map((u) => {
       const lv = this.level(u.id);
       let w = 1.0;
