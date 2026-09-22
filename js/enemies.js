@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { ENEMY_TYPES, SPAWN_WEIGHTS, SPAWN_COST, DIRECTOR, PALETTE } from './config.js';
 import { rand, pick, clamp, dist2 } from './utils.js';
+import { attachEnemyArt, updateEnemyArt } from './actor_art.js';
 
 const POOL_SIZES = { chaser: 130, speeder: 90, splitter: 45, mini: 100, shooter: 45, tank: 32, boss: 2, bomber: 70, hunter: 60, weaver: 30 };
 const EBULLET_POOL = 320;
@@ -65,6 +66,7 @@ export class Enemies {
           fuseT: -1, punchT: 0, webT: rand(1, 3), fuseDone: false, spiralT: 0,
           burnT: 0, burnDps: 0, burnAcc: 0,
         });
+        attachEnemyArt(this.list[this.list.length - 1]);
       }
     }
 
@@ -576,6 +578,7 @@ export class Enemies {
       }
 
       // 击退衰减
+      updateEnemyArt(e);
       e.vel.multiplyScalar(Math.max(0, 1 - 6 * dt));
     }
 

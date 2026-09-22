@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { PLAYER, WALL_PAD, PALETTE } from './config.js';
 import { clamp, damp } from './utils.js';
+import { attachShipArt } from './actor_art.js';
 
 export class Player {
   constructor(scene) {
@@ -45,6 +46,7 @@ export class Player {
     const t1 = new THREE.Mesh(tipGeo, tipMat); t1.position.set(-0.78, 0, 0.25);
     const t2 = new THREE.Mesh(tipGeo, tipMat); t2.position.set(0.78, 0, 0.25);
     g.add(t1, t2);
+    this.art = attachShipArt(g, [this.bodyMat, this.coreMat, wingMat, tipMat], PALETTE.player);
 
     // 玩家点光源（照亮周围地面）
     this.light = new THREE.PointLight(0x2ee6ff, 30, 14, 1.8);
@@ -231,6 +233,7 @@ export class Player {
     this.iFrames = Math.max(0, this.iFrames - dt);
     const flash = this.iFrames > 0 && Math.floor(game.time * 20) % 2 === 0;
     this.bodyMat.emissiveIntensity = flash ? 4 : 1.5;
+    this.art.material.color.setScalar(flash ? 2.5 : 1);
     // 护盾脉动
     if (this.shield) {
       this.shell.material.opacity = 0.2 + Math.sin(game.time * 5) * 0.1;

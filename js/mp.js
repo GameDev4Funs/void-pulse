@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { ENEMY_TYPES, PALETTE, ULT, PULSE, WALL_PAD, PLAYER } from './config.js';
 import { clamp, damp, dist2, rand } from './utils.js';
+import { attachShipArt, updateEnemyArt } from './actor_art.js';
 
 const PEER_COLORS = [0xffd23e, 0x4dff88, 0xff8ad8, 0x9fd8ff];
 const SNAP_RATE = 0.1;       // 世界快照 10Hz
@@ -33,6 +34,7 @@ class RemotePlayer {
     this.light = new THREE.PointLight(color, 18, 10, 1.8);
     this.light.position.y = 1.2;
     g.add(this.body, core, wing, this.light);
+    this.art = attachShipArt(g, [this.body.material, core.material, wing.material], color);
     g.position.set(0, 0.75, 0);
     scene.add(g);
     this.mesh = g;
@@ -98,6 +100,11 @@ class RemotePlayer {
   }
 
   dispose(scene) {
+    this.art.dispose();
+    this.mesh.traverse((object) => {
+      object.geometry?.dispose();
+      object.material?.dispose();
+    });
     scene.remove(this.mesh);
     this.label.remove();
   }
@@ -532,6 +539,7 @@ export class MpSession {
       if (e.burnT > 0 && Math.random() < dt * 8) {
         g.particles.spawn(e.pos.x + rand(-0.4, 0.4), 1, e.pos.z + rand(-0.4, 0.4), 0, 1.5, 0, 0.35, 0.7, 0xff7a3e, 2, 0);
       }
+      updateEnemyArt(e, e.netVX || 0, e.netVZ || 0);
     }
     // 敌弹本地模拟
     for (const b of g.enemies.ebullets) {

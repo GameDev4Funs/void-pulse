@@ -73,6 +73,14 @@ await sleep(1500);
 await settle(B, () => window.__DBG.state() === 'playing');
 check('房主进入战斗', await A.evaluate(() => window.__DBG.state() === 'playing'));
 check('客机进入战斗', await B.evaluate(() => window.__DBG.state() === 'playing'));
+for (const [tag, page] of [['房主', A], ['客机', B]]) {
+  await settle(page, () => window.__DBG.game.player.art.ready && window.__DBG.game.enemies.list.every((e) => e.art.ready));
+  check(`${tag}战机、队友与全部敌人美术加载成功`, await page.evaluate(() => {
+    const g = window.__DBG.game;
+    return g.player.art.ready && g.enemies.list.every((e) => e.art.ready)
+      && [...g.mp.peers.values()].every((p) => p.remote.art.ready && p.remote.mesh.visible);
+  }));
+}
 
 // 进行中的房间必须锁定；中途加入者没有完整世界状态，不能进入本局。
 const Late = await newPage('Late');
