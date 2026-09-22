@@ -79,7 +79,7 @@ cd 本目录 && npm start
 ## 技术要点
 
 - Three.js r185（本地 vendor，importmap 引入），UnrealBloom 辉光后期（可 lowfx 关闭）。
-- 零素材：音效与 BGM 全部由 WebAudio 实时合成（分层配乐随战况增强）。
+- 场景使用三张生成式美术贴图（合金地板 / 设施装甲 / 反应堆平台），运行时约 1 MB；原图和提示词见 [贴图说明](assets/textures/README.md)。音效与 BGM 由 WebAudio 实时合成。
 - 联机：纯标准库 Python WebSocket 房间中继 + 房主权威模拟 + 客机插值/短时预测（10Hz 世界快照、20Hz 玩家位置 + 事件流）。
 - 对象池（敌人 / 子弹 / 粒子 / 碎块 / 飘字）+ 空间哈希碰撞；小地图 10Hz 刷新，地面导引线实例化渲染。
 - 打击感：击杀顿帧、受击挤压形变、甲壳碎块迸溅、击杀冲击击退、屏幕震动、慢动作。
@@ -94,6 +94,7 @@ node scripts/route_check.mjs   # 流派觉醒 + 湮灭协议
 node scripts/mp_test.mjs       # 联机端到端（建房/同步/伤害/重生/团灭/满员）
 node scripts/mp_perf.mjs       # 四人联机高负载性能回归
 node scripts/reactor_test.mjs  # 目标时序 / 干扰 / 衰减 / 奖励 / 重置
+node scripts/texture_test.mjs [url] # 贴图回归；不传 URL 时自启 8135 测试服务
 ```
 
 新机制使用联机协议 v4；组队前所有玩家需刷新到同一版本，旧版客户端无法加入新版房间。

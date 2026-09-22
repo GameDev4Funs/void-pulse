@@ -2,16 +2,18 @@
 import * as THREE from 'three';
 import { PALETTE } from './config.js';
 import { rand } from './utils.js';
+import { createWorldTextures } from './world_textures.js';
 
 export function buildWorld(scene, arenaSize) {
   const ARENA = arenaSize;
+  const textures = createWorldTextures(ARENA * 2 + 8);
   const root = new THREE.Group();
   scene.add(root);
   // —— 雾与背景 ——
   scene.background = new THREE.Color(PALETTE.bg);
   scene.fog = new THREE.FogExp2(PALETTE.fog, 0.013);
 
-  // —— 发光网格地面（Canvas 纹理）——
+  // —— 合金甲板：生成式美术贴图，Canvas 网格作为加载与断网回退 ——
   const cvs = document.createElement('canvas');
   cvs.width = cvs.height = 512;
   const ctx = cvs.getContext('2d');
@@ -39,7 +41,9 @@ export function buildWorld(scene, arenaSize) {
   tex.repeat.set(ARENA / 4, ARENA / 4);
   tex.anisotropy = 4;
   const groundMat = new THREE.MeshBasicMaterial({ map: tex });
+  textures.bind(groundMat, 'floor', { color: 0x8399b0 });
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(ARENA * 2 + 8, ARENA * 2 + 8), groundMat);
+  ground.name = 'alloy-floor';
   ground.rotation.x = -Math.PI / 2;
   root.add(ground);
 
@@ -100,7 +104,10 @@ export function buildWorld(scene, arenaSize) {
     color: 0x08121f, emissive: 0x123d55, emissiveIntensity: 0.45,
     roughness: 0.72, metalness: 0.35,
   });
-  const deck = new THREE.Mesh(new THREE.CylinderGeometry(7.2, 7.7, 0.18, 32), deckMat);
+  const deckTopMat = deckMat.clone();
+  textures.bind(deckTopMat, 'reactor', { color: 0xb0c2d0, emissiveIntensity: 0.12 });
+  const deck = new THREE.Mesh(new THREE.CylinderGeometry(7.2, 7.7, 0.18, 64), [deckMat, deckTopMat, deckMat]);
+  deck.name = 'reactor-deck';
   deck.position.y = 0.08;
   facility.add(deck);
   const deckRingMat = new THREE.MeshBasicMaterial({
@@ -136,6 +143,7 @@ export function buildWorld(scene, arenaSize) {
     color: 0x0a1b2b, emissive: 0x245e78, emissiveIntensity: 0.55,
     roughness: 0.45, metalness: 0.55, flatShading: true,
   });
+  textures.bind(coverMat, 'hull', { color: 0xb3c9d7, emissiveIntensity: 0.16 });
   const coverGlow = new THREE.MeshBasicMaterial({
     color: 0x55eaff, transparent: true, opacity: 0.8,
     blending: THREE.AdditiveBlending, depthWrite: false,
@@ -192,6 +200,7 @@ export function buildWorld(scene, arenaSize) {
     color: 0x071421, emissive: 0x12384e, emissiveIntensity: 0.65,
     roughness: 0.55, metalness: 0.5,
   });
+  textures.bind(stationMat, 'hull', { color: 0x94b9cb, emissiveIntensity: 0.18 });
   const stations = new THREE.InstancedMesh(stationGeo, stationMat, 4);
   const stationGlowGeo = new THREE.CylinderGeometry(0.3, 0.42, 5.2, 6);
   const stationGlows = new THREE.InstancedMesh(stationGlowGeo, coverGlow, 4);
@@ -217,6 +226,7 @@ export function buildWorld(scene, arenaSize) {
     color: 0x161c29, emissive: 0xffb32e, emissiveIntensity: 0.22,
     roughness: 0.75, metalness: 0.25,
   });
+  textures.bind(crateMat, 'hull', { color: 0xc4b28c, emissiveIntensity: 0.05 });
   const crates = new THREE.InstancedMesh(crateGeo, crateMat, 16);
   for (let i = 0; i < 16; i++) {
     const q = i % 4;
@@ -326,13 +336,13 @@ export function buildWorld(scene, arenaSize) {
     color: 0xffd23e, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false,
   }));
   captureRing.rotation.x = -Math.PI / 2;
-  captureRing.position.y = 0.13;
+  captureRing.position.y = 0.205;
   root.add(captureRing);
   const progressRing = new THREE.Mesh(new THREE.RingGeometry(6.15, 6.38, 80), new THREE.MeshBasicMaterial({
     color: 0x4dff88, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false,
   }));
   progressRing.rotation.x = -Math.PI / 2;
-  progressRing.position.y = 0.14;
+  progressRing.position.y = 0.21;
   root.add(progressRing);
   const guideMat = new THREE.MeshBasicMaterial({ color: 0x2ee6ff, transparent: true, opacity: 0.24 });
   const guideGeo = new THREE.PlaneGeometry(0.22, 1.3);
@@ -352,6 +362,7 @@ export function buildWorld(scene, arenaSize) {
   let t = 0;
   return {
     root, reactor, stars, facility, colliders, coverMeshes, hazardInfo,
+    textureStatus: textures.status,
     isSpawnClear(x, z, radius = 1) {
       if (Math.hypot(x, z) < 8.8 + radius) return false;
       for (const c of colliders) {
@@ -462,6 +473,8 @@ export function buildWorld(scene, arenaSize) {
     dispose() {
       const geometries = new Set();
       const materials = new Set();
+      const ownedTextures = new Set([tex]);
+      textures.collectForDisposal(ownedTextures);
       root.traverse((obj) => {
         if (obj.geometry) geometries.add(obj.geometry);
         if (Array.isArray(obj.material)) obj.material.forEach((m) => materials.add(m));
@@ -469,9 +482,10 @@ export function buildWorld(scene, arenaSize) {
       });
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => {
-        if (m.map) m.map.dispose();
+        if (m.map) ownedTextures.add(m.map);
         m.dispose();
       });
+      ownedTextures.forEach((texture) => texture.dispose());
     },
   };
 }
