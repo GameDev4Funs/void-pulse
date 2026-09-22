@@ -193,7 +193,8 @@ try {
     e.fireT = 0; g.enemies.updateShooter(e, .01);
   });
   await guest.waitForFunction(() => window.__DBG.game.enemies.ebullets.filter((b) => b.active).length >= 2);
-  assert.ok(await guest.evaluate(() => window.__DBG.game.enemies.ebullets.some((b) => b.active && Math.abs(b.vel.length() - 10) < .01)));
+  // evEBullet 将方向分量量化到 0.01；10m/s 的长度误差上界约 0.071m/s。
+  assert.ok(await guest.evaluate(() => window.__DBG.game.enemies.ebullets.some((b) => b.active && Math.abs(b.vel.length() - 10) < .08)));
   console.log('✓ 熔核双弹由房主生成并以相同弹速同步客机');
   await host.evaluate(() => {
     const g = window.__DBG.game, d = { k: 'gov', sc: 1, tm: 2, kl: 0, lv: 1, sec: 1 };
