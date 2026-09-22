@@ -12,6 +12,9 @@ const check = (name, cond) => {
   console.log(cond ? `  ✓ ${name}` : `  ✗ ${name}`);
   if (!cond) failed++;
 };
+const settle = async (page, predicate) => {
+  await page.waitForFunction(predicate, { timeout: 5000 }).catch(() => {});
+};
 
 // 默认启动生产同构的单端口服务；传入 URL 时验证外部部署。
 const server = externalUrl ? null : spawn('python3', ['scripts/server.py', '8133'], { stdio: 'pipe' });
@@ -421,7 +424,7 @@ await A.evaluate(() => {
   g.reactor.buffUntil = g.time - 1;
   g.pickups.spawnSupply(40, 40, 0); g.pickups.spawnSupply(-40, -40, 1);
 });
-await sleep(300);
+await settle(B, () => window.__DBG.game.reactor.buffLeft === 0 && window.__DBG.game.pickups.supplies.filter((s) => s.active).length === 2);
 check('增益到期在客机同步恢复基础射速', await B.evaluate(() => window.__DBG.game.weapons.rateMul() === 1));
 check('两个补给槽正确同步', await B.evaluate(() => window.__DBG.game.pickups.supplies.filter((s) => s.active).length === 2));
 await A.evaluate(() => {
@@ -429,13 +432,13 @@ await A.evaluate(() => {
   const s = g.pickups.supplies[0]; s.active = false; s.mesh.visible = false;
   g.onSupplyTaken(s.x, s.z, { id: g.net.id, self: true }, 0);
 });
-await sleep(200);
+await settle(B, () => !window.__DBG.game.pickups.supplies[0].active);
 check('拾取一个补给不删除另一个', await B.evaluate(() => {
   const s = window.__DBG.game.pickups.supplies;
   return !s[0].active && s[1].active;
 }));
 await A.evaluate(() => { const s = window.__DBG.game.pickups.supplies[1]; s.landed = true; s.t = 23; });
-await sleep(300);
+await settle(B, () => window.__DBG.game.pickups.supplies.every((s) => !s.active));
 check('补给过期不会在客机留下幽灵舱', await B.evaluate(() => window.__DBG.game.pickups.supplies.every((s) => !s.active)));
 
 const spawnedDamage = await A.evaluate(() => {
