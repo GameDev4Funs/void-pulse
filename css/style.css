@@ -81,6 +81,7 @@ button:disabled { opacity: .4; cursor: default; }
   #hud #radar-wrap { top: 128px; bottom: auto; }
   #hud #hud-bottom { bottom: 210px; }
   #hud #hud-hints { display: none; }
+  #levelup-screen.mp-cards { bottom: 200px; }
 }
 
 /* ---------- 全屏特效 ---------- */
@@ -210,7 +211,7 @@ button:disabled { opacity: .4; cursor: default; }
 .key-hint { color: rgba(159,216,239,.5); font-size: 11px; }
 #cards { display: flex; gap: 22px; margin-top: 34px; flex-wrap: wrap; justify-content: center; padding: 0 16px; }
 #cards.locked { pointer-events: none; }
-#cards.locked .card { filter: saturate(.3) brightness(.7); }
+#cards.locked .card { pointer-events: none; filter: saturate(.3) brightness(.7); }
 .card { width: 228px; min-height: 268px; padding: 20px 18px 16px; border-radius: 8px; cursor: pointer;
   background: linear-gradient(160deg, rgba(14,22,44,.95), rgba(8,12,26,.95));
   border: 1px solid rgba(46,230,255,.3); position: relative; overflow: hidden;

@@ -462,6 +462,12 @@ check('联机卡片不再用全屏遮罩挡住战斗', await B.evaluate(() => {
   const g = window.__DBG.game, el = document.getElementById('levelup-screen');
   return g.cardOpen && el.classList.contains('mp-cards') && getComputedStyle(el).pointerEvents === 'none';
 }));
+check('联机卡片入场动画期间不可误点', await B.evaluate(() => {
+  const g = window.__DBG.game;
+  g.ui.showLevelUp(g.pendingCards, g.pendingCards.map((c) => g.upgrades.cardView(c)), (i) => g.pickCard(i));
+  return [...document.querySelectorAll('#cards .card')].every((el) => getComputedStyle(el).pointerEvents === 'none');
+}));
+await sleep(550);
 check('小屏联机三张卡全部在视口内', await B.evaluate(() => [...document.querySelectorAll('#cards .card')].every((el) => {
   const r = el.getBoundingClientRect();
   return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth;
