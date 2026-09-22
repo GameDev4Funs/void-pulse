@@ -19,12 +19,12 @@ await sleep(800);
 
 // 每个客户端独立浏览器实例（单页即前台标签，rAF 不被节流）
 const browsers = [];
-async function newBrowser() {
+async function newBrowser(viewport) {
   const b = await puppeteer.launch({
     executablePath: CHROME, headless: 'new',
     protocolTimeout: 60000,
     args: ['--no-sandbox', '--mute-audio', '--enable-unsafe-swiftshader'],
-    defaultViewport: { width: 640, height: 400 },
+    defaultViewport: viewport || { width: 640, height: 400 },
   });
   browsers.push(b);
   return b;
@@ -33,8 +33,8 @@ async function newBrowser() {
 async function jsClick(page, id) {
   await page.evaluate((i) => document.getElementById(i).click(), id);
 }
-async function newPage(tag) {
-  const page = await (await newBrowser()).newPage();
+async function newPage(tag, viewport) {
+  const page = await (await newBrowser(viewport)).newPage();
   page.on('pageerror', (e) => errors.push(`[${tag}] ` + e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`[${tag}] ` + m.text()); });
   await page.goto(URL + '?lowfx=1&bench=1', { waitUntil: 'networkidle0' });
@@ -513,6 +513,25 @@ await jsClick(E, 'mp-join-btn');
 await sleep(900);
 check('E 被拒（满员）', await E.evaluate(() => window.__DBG.state() === 'title' && document.getElementById('mp-status').textContent.includes('已满')));
 check('房间上限 4 人', await A.evaluate(() => window.__DBG.game.mp.playerCount === 4));
+
+// 最小常见手机横屏：真正启用触屏/coarse pointer，不能只缩小桌面视口。
+const Touch = await newPage('Touch', { width: 568, height: 320, isMobile: true, hasTouch: true });
+await jsClick(Touch, 'mp-btn'); await jsClick(Touch, 'mp-create-btn');
+await Touch.waitForFunction(() => window.__DBG.state() === 'lobby');
+await jsClick(Touch, 'lobby-start-btn');
+await Touch.waitForFunction(() => window.__DBG.state() === 'playing');
+await Touch.evaluate(() => window.__DBG.giveXp(12));
+await sleep(650);
+check('568×320 触屏横屏卡片、重抽与技能均可见且不重叠', await Touch.evaluate(() => {
+  const g = window.__DBG.game;
+  if (!g.input.isTouch || !matchMedia('(pointer: coarse)').matches || !g.cardOpen) return false;
+  const cards = [...document.querySelectorAll('#cards .card, #reroll-btn')].map((el) => el.getBoundingClientRect());
+  const skills = [...document.querySelectorAll('.touch-btn')].map((el) => el.getBoundingClientRect());
+  const inside = (r) => r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth;
+  const overlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  return cards.every(inside) && skills.every(inside) && cards.every((c) => skills.every((s) => !overlap(c, s)));
+}));
+if (process.env.VP_SHOTS) await Touch.screenshot({ path: `${process.env.VP_SHOTS}/touch_cards.png` });
 
 console.log('---- page errors:', errors.length);
 errors.slice(0, 10).forEach((e) => console.log(e));

@@ -84,6 +84,15 @@ button:disabled { opacity: .4; cursor: default; }
   #hud #hud-hints { display: none; }
   #levelup-screen.mp-cards { bottom: 200px; }
 }
+@media (pointer: coarse) and (max-height: 500px) {
+  #levelup-screen.mp-cards { bottom: 75px; }
+  #levelup-screen.mp-cards #cards { margin-top: 0; }
+  #hud.choosing-upgrade ~ #touch-ui .touch-btn { bottom: 8px; width: 48px; height: 48px; }
+  #hud.choosing-upgrade ~ #touch-ui #btn-dash { right: 16px; }
+  #hud.choosing-upgrade ~ #touch-ui #btn-pulse { right: 76px; }
+  #hud.choosing-upgrade ~ #touch-ui #btn-ult { right: 136px; }
+  #hud.choosing-upgrade ~ #settings-btn { visibility: hidden; }
+}
 
 /* ---------- 全屏特效 ---------- */
 #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 5;
