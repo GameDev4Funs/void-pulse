@@ -50,6 +50,7 @@ const A = await newPage('A');
 await jsClick(A, 'mp-btn');
 await jsClick(A, 'mp-create-btn');
 await sleep(1500);
+await settle(A, () => window.__DBG.state() === 'lobby');
 const room = await A.$eval('#lobby-room', (el) => el.textContent);
 const pass = await A.$eval('#lobby-pass', (el) => el.textContent);
 console.log(`房间: ${room} / ${pass}`);
@@ -62,12 +63,14 @@ await B.type('#mp-room', room);
 await B.type('#mp-pass', pass);
 await jsClick(B, 'mp-join-btn');
 await sleep(1500);
+await settle(B, () => window.__DBG.state() === 'lobby');
 check('客机进入大厅', await B.evaluate(() => window.__DBG.state() === 'lobby'));
 check('大厅显示 2 人', await B.evaluate(() => document.querySelectorAll('.lobby-player').length === 2));
 
 // 房主开战
 await jsClick(A, 'lobby-start-btn');
 await sleep(1500);
+await settle(B, () => window.__DBG.state() === 'playing');
 check('房主进入战斗', await A.evaluate(() => window.__DBG.state() === 'playing'));
 check('客机进入战斗', await B.evaluate(() => window.__DBG.state() === 'playing'));
 
@@ -78,6 +81,7 @@ await Late.type('#mp-room', room);
 await Late.type('#mp-pass', pass);
 await jsClick(Late, 'mp-join-btn');
 await sleep(700);
+await settle(Late, () => document.getElementById('mp-status').textContent.includes('已经开始'));
 check('开局后中途加入被拒绝', await Late.evaluate(() => (
   window.__DBG.state() === 'title'
   && document.getElementById('mp-status').textContent.includes('已经开始')
@@ -348,6 +352,7 @@ check('客机大招充能', await B.evaluate(() => window.__DBG.game.ult > 0));
 // 客机倒地 → 重生
 await B.evaluate(() => window.__DBG.hurt(99999));
 await sleep(700);
+await settle(A, () => [...window.__DBG.game.mp.peers.values()][0]?.dead);
 check('客机倒地', await B.evaluate(() => window.__DBG.game.player.dead));
 check('重生倒计时显示', await B.evaluate(() => !document.getElementById('respawn-overlay').classList.contains('hidden')));
 check('倒地队友在连续心跳下保持隐藏', await A.evaluate(() => {
@@ -363,6 +368,7 @@ await B.evaluate(() => window.__DBG.hurt(99999));
 await sleep(500);
 await A.evaluate(() => window.__DBG.hurt(99999));
 await sleep(2000);
+await settle(B, () => window.__DBG.state() === 'gameover');
 check('主机团灭结算', await A.evaluate(() => window.__DBG.state() === 'gameover'));
 check('客机收到团灭', await B.evaluate(() => window.__DBG.state() === 'gameover'));
 await A.keyboard.press('KeyR');
@@ -372,6 +378,8 @@ check('返回大厅', await A.evaluate(() => window.__DBG.state() === 'lobby'));
 // 第二局：远端预测/死亡/坐标状态必须从新一局重新建立。
 await jsClick(A, 'lobby-start-btn');
 await sleep(1000);
+await settle(A, () => [...window.__DBG.game.mp.peers.values()].every((p) => p.ready && !p.dead && p.remote.hasState));
+await settle(B, () => window.__DBG.state() === 'playing');
 check('第二局双方重新开战', await A.evaluate(() => window.__DBG.state() === 'playing')
   && await B.evaluate(() => window.__DBG.state() === 'playing'));
 check('第二局队友状态已从首个心跳重建', await A.evaluate(() => {
@@ -495,6 +503,7 @@ await B.evaluate(() => window.__DBG.hurt(99999));
 await sleep(300);
 await A.evaluate(() => window.__DBG.hurt(99999));
 await sleep(1800);
+await settle(A, () => window.__DBG.state() === 'gameover');
 await A.keyboard.press('KeyR');
 await sleep(800);
 check('第二局结算后仍可返回大厅', await A.evaluate(() => window.__DBG.state() === 'lobby'));
@@ -507,6 +516,7 @@ for (const tag of ['C', 'D']) {
   await P.type('#mp-pass', pass);
   await P.click('#mp-join-btn');
   await sleep(900);
+  await settle(P, () => window.__DBG.state() === 'lobby');
   check(`${tag} 加入成功`, await P.evaluate(() => window.__DBG.state() === 'lobby'));
 }
 const E = await newPage('E');
@@ -515,6 +525,7 @@ await E.type('#mp-room', room);
 await E.type('#mp-pass', pass);
 await jsClick(E, 'mp-join-btn');
 await sleep(900);
+await settle(E, () => document.getElementById('mp-status').textContent.includes('已满'));
 check('E 被拒（满员）', await E.evaluate(() => window.__DBG.state() === 'title' && document.getElementById('mp-status').textContent.includes('已满')));
 check('房间上限 4 人', await A.evaluate(() => window.__DBG.game.mp.playerCount === 4));
 
