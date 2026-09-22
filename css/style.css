@@ -46,8 +46,8 @@ button:disabled { opacity: .4; cursor: default; }
 .mp-cards #cards { gap: 10px; flex-wrap: nowrap; }
 .mp-cards .card { width: 210px; min-height: 152px; padding: 12px; background: rgba(7,16,28,.94); pointer-events: auto; }
 .mp-cards .c-icon { display: none; }
-.mp-cards .c-name { font-size: 16px; margin-top: 4px; }
-.mp-cards .c-desc { font-size: 11px; margin-top: 7px; }
+#levelup-screen.mp-cards .c-name { font-size: 16px; margin-top: 4px; }
+#levelup-screen.mp-cards .c-desc { font-size: 11px; line-height: 1.5; min-height: 0; margin-top: 7px; }
 .mp-cards #reroll-btn { pointer-events: auto; margin-top: 8px; }
 #btn-ult { right: 108px; bottom: 40px; border-color: #c77bff; color: #c77bff; }
 .lr-code { user-select: text; -webkit-user-select: text; }
@@ -61,12 +61,20 @@ button:disabled { opacity: .4; cursor: default; }
   #field-hint { display: none; }
   #levelup-screen.mp-cards { bottom: 110px; }
   .mp-cards .card { width: 30vw; min-height: 140px; padding: 8px; }
-  .mp-cards .c-name { font-size: 13px; }
-  .mp-cards .c-desc { font-size: 10px; }
+  #levelup-screen.mp-cards .c-name { font-size: 13px; }
+  #levelup-screen.mp-cards .c-desc { font-size: 10px; }
   .utility-btn { bottom: 14px; right: 10px; }
   #hud #level-badge { top: 45px; left: 50%; right: auto; transform: translateX(-50%); }
   #hud #hud-center { top: 98px; width: 94vw; }
   #hud #sector-label { display: none; }
+}
+@media (max-height: 500px) {
+  #levelup-screen.mp-cards { bottom: 75px; }
+  .mp-cards #levelup-title, .mp-cards #levelup-sub, .mp-cards .c-pips, .mp-cards .c-tag, .mp-cards .c-route { display: none; }
+  #levelup-screen.mp-cards .card { min-height: 100px; padding: 8px; }
+  #levelup-screen.mp-cards .c-name { font-size: 13px; }
+  #levelup-screen.mp-cards .c-desc { font-size: 10px; }
+  #levelup-screen.mp-cards #reroll-btn { margin-top: 5px; padding: 5px 12px; }
 }
 @media (pointer: coarse) {
   #hud #objective { top: 128px; bottom: auto; width: min(210px,55vw); }

@@ -462,6 +462,11 @@ check('联机卡片不再用全屏遮罩挡住战斗', await B.evaluate(() => {
   const g = window.__DBG.game, el = document.getElementById('levelup-screen');
   return g.cardOpen && el.classList.contains('mp-cards') && getComputedStyle(el).pointerEvents === 'none';
 }));
+check('小屏联机三张卡全部在视口内', await B.evaluate(() => [...document.querySelectorAll('#cards .card')].every((el) => {
+  const r = el.getBoundingClientRect();
+  return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth;
+})));
+if (process.env.VP_SHOTS) await B.screenshot({ path: `${process.env.VP_SHOTS}/mp_cards.png` });
 await B.keyboard.press('KeyR');
 await sleep(200);
 check('联机重抽消耗本局次数', await B.evaluate(() => window.__DBG.game.rerolls === 1));
