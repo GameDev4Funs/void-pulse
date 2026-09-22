@@ -1,7 +1,7 @@
 import { defaultWsUrl, Net, PROTOCOL_VERSION } from '../js/net.js';
 
-if (PROTOCOL_VERSION !== 4) {
-  throw new Error('反应堆与补给状态变更后必须使用联机协议 v4');
+if (PROTOCOL_VERSION !== 5) {
+  throw new Error('星球规则同步必须使用联机协议 v5');
 }
 
 globalThis.location = {

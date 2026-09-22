@@ -21,6 +21,7 @@ import { Net, genRoomCode, genPassword, defaultWsUrl } from './net.js';
 import { MpSession } from './mp.js';
 import { Reactor, REACTOR } from './reactor.js';
 import { loadSettings, saveSettings } from './settings.js';
+import { getPlanet, isPlanetId, applyPlanetStats } from './planets.js';
 
 const CAM_OFFSET = new THREE.Vector3(0, 28.5, 15.5);
 const MP_ARENA = 80;
@@ -58,7 +59,8 @@ export class Game {
     this.audio = new AudioEngine(this.settings);
     this.input = new Input(this.renderer.domElement);
     this.input.onFirstGesture = () => { this.audio.init(); this.audio.resume(); };
-    this.world = buildWorld(this.scene, ARENA);
+    this.planet = getPlanet(localStorage.getItem('vp_planet'));
+    this.world = buildWorld(this.scene, ARENA, this.planet);
     this.particles = new Particles(this.scene);
     this.shockwaves = new Shockwaves(this.scene);
     this.debris = new Debris(this.scene);
@@ -159,14 +161,28 @@ export class Game {
   }
 
   // ============ 联机：模式/大厅 ============
-  setArena(size) {
-    if (size === this.arena) return;
+  setArena(size, force = false) {
+    if (size === this.arena && !force) return;
     this.arena = size;
     if (this.world) {
       this.scene.remove(this.world.root);
       this.world.dispose?.();
     }
-    this.world = buildWorld(this.scene, size);
+    this.world = buildWorld(this.scene, size, this.planet);
+  }
+
+  selectPlanet(id, fromHost = false) {
+    if (!isPlanetId(id) || !['title', 'lobby', 'gameover'].includes(this.state)) return false;
+    if (this.mp && !this.mp.isHost && !fromHost) return false;
+    if (this._mpBeginPending) return false;
+    if (this.planet.id !== id) {
+      this.planet = getPlanet(id);
+      this.setArena(this.arena, true);
+    }
+    if (!fromHost) localStorage.setItem('vp_planet', id);
+    this.ui.refreshPlanets();
+    if (this.mpIsHost() && !fromHost) this.mp.send({ k: 'planet', id });
+    return true;
   }
 
   mpIsHost() { return !!(this.mp && this.mp.isHost); }
@@ -225,7 +241,7 @@ export class Game {
   }
 
   arenaHazardFactorAt(x, z) {
-    return this.world.hazardAt(x, z) ? 0.68 : 1;
+    return this.world.hazardAt(x, z) ? this.planet.hazard.slow : 1;
   }
 
   getPickupPlayers() {
@@ -273,6 +289,7 @@ export class Game {
       for (const peer of msg.peers) this.mp._addPeer(peer.id, peer.name);
       this.state = 'lobby';
       this.ui.showLobby(false, msg.room, null, this.mp.roster());
+      this.mp.send({ k: 'planetRequest' });
     });
     this.net.on('err', (m) => {
       this.ui.setMpStatus(m);
@@ -293,12 +310,14 @@ export class Game {
       if (!locked) this.ui.toast('房间锁定失败，请重试', '#ff6b81');
       return;
     }
-    this.mp.send({ k: 'begin' });
+    this.mp.send({ k: 'begin', planet: this.planet.id });
     this.startMp();
   }
 
   // 收到 begin（或房主自己）→ 开局
-  startMp() {
+  startMp(planetId = this.planet.id) {
+    if (!this.mp || !['lobby', 'gameover'].includes(this.state) || !isPlanetId(planetId)) return;
+    this.selectPlanet(planetId, true);
     this.mp.markRunParticipants();
     this.setArena(MP_ARENA);
     this.resetRun();
@@ -306,7 +325,7 @@ export class Game {
     this.ui.showHud();
     this.ui.hideLobby();
     this.audio.init(); this.audio.resume();
-    this.ui.toast(`⚔ ${this.mp.participantCount} 人小队出击！`, '#4dff88');
+    this.ui.toast(`⚔ ${this.planet.name} · ${this.mp.participantCount} 人小队出击！`, this.planet.color);
   }
 
   // 联机团灭（主机广播或本地判定）
@@ -352,6 +371,7 @@ export class Game {
     this.state = 'playing';
     this.ui.showHud();
     this.audio.init(); this.audio.resume();
+    this.ui.toast(`${this.planet.name} · ${this.planet.perk}`, this.planet.color);
   }
 
   resetRun() {
@@ -379,6 +399,8 @@ export class Game {
     this.ult = 0; this.ultUses = 0; this.ultBeamT = 0;
     this.ultBeam.visible = false;
     this.player.reset();
+    applyPlanetStats(this.player.stats, this.planet);
+    this.sporeDamageT = 0.5;
     this.weapons.reset();
     this.enemies.reset();
     this.pickups.reset();
@@ -397,7 +419,10 @@ export class Game {
     this.resetRun();
     if (this.mp) { this.mp.dispose(); this.mp = null; }
     if (this.net) { this.net.close(); this.net = null; }
-    this.setArena(ARENA);
+    const personalPlanet = getPlanet(localStorage.getItem('vp_planet'));
+    const changed = personalPlanet.id !== this.planet.id;
+    this.planet = personalPlanet;
+    this.setArena(ARENA, changed);
     this.state = 'title';
     this.ui.hideLobby();
     this.ui.showTitle(this.best);
@@ -890,6 +915,7 @@ export class Game {
   frameInner() {
     const rawDt = Math.min(this.clock.getDelta(), 0.05);
     this.handleGlobalKeys();
+    document.body.classList.toggle('in-combat', this.state === 'playing' && !this.ui.settingsOpen && !this.cardOpen && !this.input.isTouch);
 
     // 时间缩放（顿帧 / 慢动作）
     let target = (this.state === 'playing' || this.state === 'dying') ? 1 : 0;
@@ -963,6 +989,18 @@ export class Game {
     const inArenaHazard = this.world.hazardAt(p.pos.x, p.pos.z);
     this.zoneSlowFactor = this.enemies.slowFactorAt(p.pos.x, p.pos.z) * this.arenaHazardFactorAt(p.pos.x, p.pos.z);
     this.updateArenaHazard(dt, inArenaHazard);
+    if (p.alive && !p.dead) {
+      if (p.stats.hp > 0) p.heal(this.planet.regen * dt);
+      if (this.planet.shot === 'spore' && this.enemies.slowFactorAt(p.pos.x, p.pos.z) < 1) {
+        this.sporeDamageT -= dt;
+        if (this.sporeDamageT <= 0) {
+          this.sporeDamageT = 0.8;
+          const dealt = p.takeDamage(5, this);
+          if (dealt === 'shield') this.onShieldBreak();
+          else if (dealt !== false) this.onPlayerHurt(dealt, p.pos.x, p.pos.z);
+        }
+      } else this.sporeDamageT = 0.5;
+    }
 
     // 空投补给（主机/单机）
     if (!isGuest && this.time >= this.supplyAt) {
@@ -1074,7 +1112,7 @@ export class Game {
     const info = this.world.hazardInfo;
     if (info.phase === 'warning' && info.cycle !== this.arenaEventSeen) {
       this.arenaEventSeen = info.cycle;
-      this.ui.toast('⚠ 能源通道即将放电 —— 离开橙色区域', '#ffb13e');
+      this.ui.toast(`⚠ ${this.planet.hazard.name}即将来袭 —— 离开闪烁区域`, '#ffb13e');
       this.audio.bossWarn();
     }
     if (info.phase !== 'active' || !inside || !this.player.alive || this.player.dead) {
@@ -1085,7 +1123,7 @@ export class Game {
     if (this.arenaHazardDamageT > 0) return;
     this.arenaHazardDamageT = 0.72;
     const p = this.player;
-    const dealt = p.takeDamage(7, this);
+    const dealt = p.takeDamage(this.planet.hazard.damage, this);
     if (dealt === 'shield') this.onShieldBreak();
     else if (dealt !== false) {
       this.onPlayerHurt(dealt, p.pos.x, p.pos.z);

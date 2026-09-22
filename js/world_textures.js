@@ -7,16 +7,18 @@ const FILES = {
 };
 
 // 每个世界只加载三张贴图；设施共用装甲图，旧世界的异步回调不能重新绑定材质。
-export function createWorldTextures(floorSpan) {
+export function createWorldTextures(floorSpan, planet) {
   let disposed = false;
   const entries = new Map();
   const status = {};
   const loader = new THREE.TextureLoader();
-  for (const [key, file] of Object.entries(FILES)) {
+  for (const [key, defaultFile] of Object.entries(FILES)) {
+    const file = key === 'floor' && planet?.floor ? planet.floor : defaultFile;
     const entry = { texture: null, ready: false, bindings: [] };
     entries.set(key, entry);
     status[key] = 'loading';
-    const url = new URL(`../assets/textures/${file}`, import.meta.url).href;
+    const folder = key === 'floor' && planet?.floor ? 'planets' : 'textures';
+    const url = new URL(`../assets/${folder}/${file}`, import.meta.url).href;
     entry.texture = loader.load(url, () => {
       if (disposed) return;
       entry.ready = true;

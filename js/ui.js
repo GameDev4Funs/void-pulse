@@ -3,6 +3,7 @@ import { formatTime, formatNum, clamp } from './utils.js';
 import { XP_CURVE, PLAYER, ROUTES, ULT } from './config.js';
 import { TacticalHud } from './tactical_hud.js';
 import { saveSettings } from './settings.js';
+import { PLANETS } from './planets.js';
 
 const $ = (id) => document.getElementById(id);
 const escapeText = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -49,6 +50,33 @@ export class UI {
     this._fpsAcc = 0; this._fpsN = 0; this._fpsT = 0;
     this._lastChain = 0;
     this._toastTimer = null;
+    for (const id of ['title-planets', 'lobby-planets']) {
+      const picker = $(id);
+      picker.innerHTML = `<div class="planet-heading">选择目的地 <span class="planet-authority"></span></div><div class="planet-grid">${PLANETS.map((p) =>
+        `<button type="button" class="planet-card planet-${p.id}" data-planet="${p.id}" style="--planet-color:${p.color}" aria-pressed="false"><span class="planet-orb" aria-hidden="true"></span><span class="planet-code">${p.code}</span><b>${p.name}</b><span class="planet-biome">${p.biome}</span></button>`
+      ).join('')}</div><div class="planet-brief" aria-live="polite"></div>`;
+      picker.addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-planet]');
+        if (button) this.game.selectPlanet(button.dataset.planet);
+      });
+    }
+  }
+
+  refreshPlanets() {
+    const g = this.game, planet = g.planet;
+    for (const id of ['title-planets', 'lobby-planets']) {
+      const picker = $(id);
+      const locked = !!g.mp && !g.mp.isHost;
+      picker.querySelector('.planet-authority').textContent = locked ? '跟随房主' : '本局结束后可重新选择';
+      for (const button of picker.querySelectorAll('[data-planet]')) {
+        button.setAttribute('aria-pressed', String(button.dataset.planet === planet.id));
+        button.disabled = locked;
+      }
+      picker.querySelector('.planet-brief').innerHTML = `<strong style="color:${planet.color}">${planet.perk}</strong><span>${planet.threat}</span><small>${planet.tactics}</small>`;
+    }
+    $('planet-label').textContent = `${planet.name} / 战场目标`;
+    $('planet-label').style.color = planet.color;
+    $('planet-label').title = planet.perk;
   }
 
   toast(text, color = '#ffd23e') {
@@ -116,6 +144,7 @@ export class UI {
 
   // ---------- 大厅 ----------
   showLobby(isHost, room, pass, roster) {
+    this.refreshPlanets();
     $('touch-ui').classList.add('hidden');
     this.el.title.classList.add('hidden');
     this.el.gameover.classList.add('hidden');
@@ -160,6 +189,7 @@ export class UI {
 
   // ---------- 屏幕切换 ----------
   showTitle(best) {
+    this.refreshPlanets();
     $('touch-ui').classList.add('hidden');
     this.el.title.classList.remove('hidden');
     this.el.hud.classList.add('hidden');
@@ -172,6 +202,7 @@ export class UI {
     this.el.titleBest.textContent = best > 0 ? `最高纪录 ${formatNum(best)}` : '暂无纪录 —— 去创造历史吧';
   }
   showHud() {
+    this.refreshPlanets();
     $('touch-ui').classList.toggle('hidden', !this.game.input.isTouch);
     this.el.title.classList.add('hidden');
     this.el.hud.classList.remove('hidden');

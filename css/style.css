@@ -187,6 +187,40 @@ button:disabled { opacity: .4; cursor: default; }
 #title-screen { background: radial-gradient(ellipse at 50% 120%, rgba(46,230,255,.10), transparent 55%),
   radial-gradient(ellipse at 50% -20%, rgba(255,62,165,.10), transparent 55%), rgba(3,4,12,.66); }
 .title-core { text-align: center; animation: fadeUp .8s ease-out; max-width: 720px; padding: 0 24px; }
+.title-core, .lobby-panel { flex-shrink: 0; }
+body.in-combat #app canvas { cursor: url('../assets/ui/crosshair.svg') 16 16, crosshair; }
+.planet-picker { text-align: left; margin: 20px auto 0; width: 100%; max-width: 650px; }
+.planet-heading { font-size: 12px; letter-spacing: 2px; color: #e0edff; margin-bottom: 9px; }
+.planet-authority { float: right; font-size: 10px; color: #7993a8; letter-spacing: 0; }
+.planet-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.planet-card { position: relative; padding: 12px 8px; min-width: 0; border: 1px solid #26374a; border-radius: 7px;
+  color: #a9bacb; background: #0a1221; cursor: pointer; font-family: var(--font); text-align: center; transition: border-color .15s, background .15s; }
+.planet-card:hover:not(:disabled), .planet-card:focus-visible { border-color: var(--planet-color); outline: 1px solid var(--planet-color); }
+.planet-card[aria-pressed="true"] { border-color: var(--planet-color); background: #142436; box-shadow: inset 0 -2px var(--planet-color); color: #fff; }
+.planet-card:disabled { cursor: default; }
+.planet-card b, .planet-code, .planet-biome { display: block; }
+.planet-card b { font-size: 15px; margin: 5px 0; letter-spacing: 2px; }
+.planet-code { font-size: 9px; letter-spacing: 1px; color: var(--planet-color); }
+.planet-biome { font-size: 10px; line-height: 1.5; }
+.planet-orb { display: block; width: 40px; height: 40px; margin: 0 auto 8px; border-radius: 50%;
+  background: radial-gradient(circle at 28% 25%, #bedaff44, transparent 45%), url('../assets/textures/floor-alloy-v1.jpg') center / 85px;
+  box-shadow: inset -12px -5px 14px #000c, 0 0 12px #62d5ff22; border: 1px solid var(--planet-color); }
+.planet-cryo .planet-orb { background-image: url('../assets/planets/cryogenic-ground-v1.jpg'); }
+.planet-volcanic .planet-orb { background-image: url('../assets/planets/volcanic-ground-v1.jpg'); }
+.planet-mycelium .planet-orb { background-image: url('../assets/planets/mycelium-ground-v1.jpg'); }
+.planet-brief { min-height: 62px; padding: 10px 12px; margin-top: 8px; border-left: 2px solid #415a71; background: #0a122199; line-height: 1.7; }
+.planet-brief strong, .planet-brief span, .planet-brief small { display: block; }
+.planet-brief strong { font-size: 12px; font-weight: 500; }
+.planet-brief span { font-size: 11px; color: #d1dfec; }
+.planet-brief small { font-size: 10px; color: #93a9bc; }
+#lobby-planets { max-width: 580px; }
+@media (max-width: 600px) {
+  .planet-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .planet-orb { width: 28px; height: 28px; margin-bottom: 5px; }
+  .planet-card { padding: 8px 6px; }
+  .title-core { width: 100%; padding: 0 18px; }
+  .planet-authority { float: none; display: block; margin-top: 4px; }
+}
 @keyframes fadeUp { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
 #game-logo { font-size: clamp(56px, 9vw, 96px); font-weight: 900; letter-spacing: 14px; color: #fff;
   text-shadow: 0 0 18px rgba(46,230,255,.9), 0 0 60px rgba(46,230,255,.5); line-height: 1; }
@@ -200,6 +234,9 @@ button:disabled { opacity: .4; cursor: default; }
   border-radius: 4px; cursor: pointer; box-shadow: 0 0 24px rgba(46,230,255,.55);
   transition: transform .15s, box-shadow .15s; }
 .big-btn:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 0 44px rgba(46,230,255,.95); }
+button.big-btn { border: 0; font-family: var(--font); }
+button.small-btn { font-family: var(--font); background: transparent; }
+button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
 .small-btn { display: inline-block; margin-top: 16px; padding: 8px 26px; font-size: 13px; letter-spacing: 3px;
   color: #9fd8ef; border: 1px solid rgba(46,230,255,.4); border-radius: 4px; cursor: pointer;
   transition: all .15s; }
@@ -212,6 +249,13 @@ button:disabled { opacity: .4; cursor: default; }
 .controls-grid span { font-size: 11px; color: rgba(207,233,255,.65); }
 #title-best { margin-top: 26px; font-size: 12px; letter-spacing: 3px; color: var(--gold);
   text-shadow: 0 0 10px rgba(255,210,62,.6); min-height: 16px; }
+@media (min-width: 761px) and (max-height: 900px) {
+  #game-logo { font-size: 50px; }
+  #game-logo span { display: inline; letter-spacing: 14px; }
+  .title-desc { margin-top: 14px; }
+  .controls-grid { margin-top: 20px; }
+  #title-best { margin-top: 16px; }
+}
 
 /* ---------- 升级卡片 ---------- */
 #levelup-screen { background: rgba(3,4,12,.6); }

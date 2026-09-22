@@ -154,6 +154,9 @@ export class Enemies {
   dropWeb(x, z) {
     const w = this.webZones.find((q) => !q.active) || this.webZones[0];
     w.active = true; w.x = x; w.z = z; w.t = 0;
+    w.r = this.game.planet.shot === 'spore' ? 3.1 : 2.6;
+    w.dur = this.game.planet.shot === 'spore' ? 7 : 6;
+    w.mesh.material.color.setHex(this.game.planet.shot === 'spore' ? 0xb2ef56 : PALETTE.webZone);
     w.mesh.position.set(x, 0.1, z);
     w.mesh.visible = true;
     if (this.game.mpIsHost()) this.game.mp.evWeb(x, z);
@@ -165,8 +168,8 @@ export class Enemies {
     const p = g.randomAlivePlayerPos();
     const players = g.alivePlayerPositions();
     const n = Math.min(20, 8 + Math.floor(g.sector * 1.5));
-    const hunterOk = g.time >= ENEMY_TYPES.hunter.unlockAt;
-    const speederOk = g.time >= ENEMY_TYPES.speeder.unlockAt;
+    const hunterOk = this.typeAvailable('hunter', g.time);
+    const speederOk = this.typeAvailable('speeder', g.time);
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + rand(-0.1, 0.1);
       const r = rand(16, 19);
@@ -175,7 +178,9 @@ export class Enemies {
       if (!g.world.isSpawnClear(x, z, 0.9)) continue;
       if (players.some((q) => dist2(x, z, q.x, q.z) < 12 * 12)) continue;
       const roll = Math.random();
-      const type = hunterOk && roll < 0.3 ? 'hunter' : speederOk && roll < 0.55 ? 'speeder' : 'chaser';
+      const type = g.planet.id === 'station'
+        ? (hunterOk && roll < 0.3 ? 'hunter' : speederOk && roll < 0.55 ? 'speeder' : 'chaser')
+        : this.pickType(g.time);
       if (!this.queueSpawn(type, x, z, false, 1.15)) break;
     }
     g.ui.toast('⚠ 虫群包围 —— 突围！', '#ff5f7a');
@@ -281,15 +286,21 @@ export class Enemies {
     return Math.max(0, Math.floor(this.paceAt(this.game.time).cap) - this.activeCount - this.pendingCount);
   }
 
+  unlockAt(type) { return this.game.planet.unlocks[type] ?? ENEMY_TYPES[type].unlockAt; }
+
+  typeAvailable(type, time) {
+    return (this.game.planet.roster || SPAWN_WEIGHTS).some(([ty]) => ty === type) && this.unlockAt(type) <= time;
+  }
+
   pickType(t) {
     const counts = new Map();
     for (const e of this.list) {
       if (e.active && !e.dying) counts.set(e.type, (counts.get(e.type) || 0) + 1);
     }
-    const avail = SPAWN_WEIGHTS
-      .filter(([ty]) => ENEMY_TYPES[ty].unlockAt <= t)
+    const avail = (this.game.planet.roster || SPAWN_WEIGHTS)
+      .filter(([ty]) => this.unlockAt(ty) <= t)
       .map(([ty, weight]) => {
-        const age = t - ENEMY_TYPES[ty].unlockAt;
+        const age = t - this.unlockAt(ty);
         const ramp = ty === 'chaser' ? 1 : clamp(0.2 + age / 42, 0.2, 1);
         const crowded = (counts.get(ty) || 0) > Math.max(5, this.activeCount * 0.32) ? 0.32 : 1;
         return [ty, weight * ramp * crowded];
@@ -626,7 +637,19 @@ export class Enemies {
     e.fireT -= dt;
     if (e.fireT <= 0 && d < 26) {
       e.fireT = base.fireCd * rand(0.85, 1.15);
-      this.fireEBullet(e.pos.x, e.pos.z, dx / d, dz / d, base.bulletSpeed, e.dmg);
+      const shot = g.planet.shot;
+      const aim = Math.atan2(dx, dz);
+      if (shot === 'fan') {
+        e.fireT *= 1.25;
+        for (const offset of [-0.22, 0, 0.22]) this.fireEBullet(e.pos.x, e.pos.z, Math.sin(aim + offset), Math.cos(aim + offset), 13, e.dmg * 0.75);
+      } else if (shot === 'heavy') {
+        e.fireT *= 1.2;
+        for (const offset of [-0.08, 0.08]) this.fireEBullet(e.pos.x, e.pos.z, Math.sin(aim + offset), Math.cos(aim + offset), 10, e.dmg * 1.25);
+      } else if (shot === 'spore') {
+        e.fireT *= 1.35;
+        this.fireEBullet(e.pos.x, e.pos.z, dx / d, dz / d, 11, e.dmg);
+        this.dropWeb(e.pos.x, e.pos.z);
+      } else this.fireEBullet(e.pos.x, e.pos.z, dx / d, dz / d, base.bulletSpeed, e.dmg);
       e.flashT = 0.09;
       g.particles.burst(e.pos.x, 0.8, e.pos.z, 4, PALETTE.shooter, { speed: 3, life: 0.25, size: 0.5 });
     }
@@ -711,6 +734,13 @@ export class Enemies {
       }
       // 联机：通知客机自检爆炸半径
       if (g.mpIsHost()) g.mp.send({ k: 'blast', x: +e.pos.x.toFixed(1), z: +e.pos.z.toFixed(1), r: base.blastR, dmg: base.blastDmg });
+      if (g.planet.shot === 'heavy') {
+        // 仅引信引爆产生爆片；击杀蜂群仍是安全的连锁奖励。
+        for (let i = 0; i < 8; i++) {
+          const a = i * Math.PI / 4;
+          this.fireEBullet(e.pos.x, e.pos.z, Math.sin(a), Math.cos(a), 9, 7);
+        }
+      }
     }
     g.particles.burst(e.pos.x, 0.6, e.pos.z, 26, 0xff5f2e, { speed: 12, life: 0.6, size: 0.8 });
     g.particles.burst(e.pos.x, 0.6, e.pos.z, 10, 0xffe93e, { speed: 7, life: 0.4, size: 0.6 });
@@ -768,11 +798,20 @@ export class Enemies {
 
     e.attackT -= dt;
     if (e.attackT > 0) return;
-    const attacks = phase === 1 ? ['radial', 'fan', 'summon'] : phase === 2 ? ['radial', 'fan', 'charge', 'summon'] : ['radial', 'charge', 'fan', 'charge'];
+    const attacks = g.planet.shot === 'fan' ? ['fan', 'fan', 'charge', 'radial']
+      : g.planet.shot === 'heavy' ? ['radial', 'charge', 'summon']
+      : g.planet.shot === 'spore' ? ['spores', 'summon', 'fan']
+      : phase === 1 ? ['radial', 'fan', 'summon'] : phase === 2 ? ['radial', 'fan', 'charge', 'summon'] : ['radial', 'charge', 'fan', 'charge'];
     const atk = pick(attacks);
     e.attackT = (phase === 1 ? 3.4 : phase === 2 ? 2.7 : 2.1) * rand(0.9, 1.1);
 
-    if (atk === 'radial') {
+    if (atk === 'spores') {
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2 + g.time * 0.2;
+        this.dropWeb(e.pos.x + Math.cos(a) * 5, e.pos.z + Math.sin(a) * 5);
+      }
+      g.audio.nova();
+    } else if (atk === 'radial') {
       const n = 14 + phase * 4;
       const off = rand(Math.PI * 2);
       for (let i = 0; i < n; i++) {
@@ -806,7 +845,9 @@ export class Enemies {
       const n = 3 + phase;
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2;
-        const type = phase >= 2 && i % 2 === 0 ? 'speeder' : 'chaser';
+        const type = g.planet.id === 'station'
+          ? (phase >= 2 && i % 2 === 0 ? 'speeder' : 'chaser')
+          : g.planet.summons[i % g.planet.summons.length];
         const pos = this.findLocalSpawnPosition(e.pos, type, a);
         if (pos) this.queueSpawn(type, pos.x, pos.z, false, 0.7);
       }
@@ -822,6 +863,7 @@ export class Enemies {
     b.pos.set(x, 0.75, z);
     b.vel.set(dx * speed, 0, dz * speed);
     b.dmg = dmg;
+    b.mesh.material.color.setHex(this.game.planet.id === 'station' ? PALETTE.enemyBullet : this.game.planet.accent);
     b.life = 6;
     b.mesh.visible = true;
     b.mesh.position.copy(b.pos);

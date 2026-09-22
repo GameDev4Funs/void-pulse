@@ -12,6 +12,7 @@
     "test:reactor": "node scripts/reactor_test.mjs",
     "test:textures": "node scripts/texture_test.mjs",
     "test:actors": "node scripts/actor_art_test.mjs",
+    "test:planets": "node scripts/planet_test.mjs",
     "test:smoke": "node scripts/smoke.mjs"
   },
   "type": "module",

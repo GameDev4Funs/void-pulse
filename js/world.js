@@ -3,15 +3,16 @@ import * as THREE from 'three';
 import { PALETTE } from './config.js';
 import { rand } from './utils.js';
 import { createWorldTextures } from './world_textures.js';
+import { getPlanet } from './planets.js';
 
-export function buildWorld(scene, arenaSize) {
+export function buildWorld(scene, arenaSize, planet = getPlanet('station')) {
   const ARENA = arenaSize;
-  const textures = createWorldTextures(ARENA * 2 + 8);
+  const textures = createWorldTextures(ARENA * 2 + 8, planet);
   const root = new THREE.Group();
   scene.add(root);
   // —— 雾与背景 ——
-  scene.background = new THREE.Color(PALETTE.bg);
-  scene.fog = new THREE.FogExp2(PALETTE.fog, 0.013);
+  scene.background = new THREE.Color(planet.background);
+  scene.fog = new THREE.FogExp2(planet.fog, 0.013);
 
   // —— 合金甲板：生成式美术贴图，Canvas 网格作为加载与断网回退 ——
   const cvs = document.createElement('canvas');
@@ -41,7 +42,7 @@ export function buildWorld(scene, arenaSize) {
   tex.repeat.set(ARENA / 4, ARENA / 4);
   tex.anisotropy = 4;
   const groundMat = new THREE.MeshBasicMaterial({ map: tex });
-  textures.bind(groundMat, 'floor', { color: 0x8399b0 });
+  textures.bind(groundMat, 'floor', { color: planet.tint });
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(ARENA * 2 + 8, ARENA * 2 + 8), groundMat);
   ground.name = 'alloy-floor';
   ground.rotation.x = -Math.PI / 2;
@@ -50,7 +51,7 @@ export function buildWorld(scene, arenaSize) {
   // 远处黑暗底版（防止看到雾外虚空）
   const far = new THREE.Mesh(
     new THREE.PlaneGeometry(600, 600),
-    new THREE.MeshBasicMaterial({ color: PALETTE.bg })
+    new THREE.MeshBasicMaterial({ color: planet.background })
   );
   far.rotation.x = -Math.PI / 2;
   far.position.y = -0.2;
@@ -74,7 +75,7 @@ export function buildWorld(scene, arenaSize) {
     wallGroup.add(w);
   }
   // 顶部能量线
-  const railMat = new THREE.MeshBasicMaterial({ color: 0x8ff4ff });
+  const railMat = new THREE.MeshBasicMaterial({ color: planet.accent });
   const railGeo = new THREE.BoxGeometry(ARENA * 2 + 1.6, 0.08, 0.08);
   const railGeo2 = new THREE.BoxGeometry(0.08, 0.08, ARENA * 2 + 1.6);
   const rails = [
@@ -145,17 +146,18 @@ export function buildWorld(scene, arenaSize) {
   });
   textures.bind(coverMat, 'hull', { color: 0xb3c9d7, emissiveIntensity: 0.16 });
   const coverGlow = new THREE.MeshBasicMaterial({
-    color: 0x55eaff, transparent: true, opacity: 0.8,
+    color: planet.accent, transparent: true, opacity: 0.8,
     blending: THREE.AdditiveBlending, depthWrite: false,
   });
-  const pylonGeo = new THREE.CylinderGeometry(1.35, 1.7, 3.8, 8);
+  const pylonGeo = new THREE.CylinderGeometry(planet.id === 'cryo' ? 0.1 : 1.35, 1.7, 3.8, planet.id === 'volcanic' ? 6 : 8);
   const pylonCapGeo = new THREE.CylinderGeometry(0.78, 1.05, 0.38, 8);
   const pylonRingGeo = new THREE.TorusGeometry(1.18, 0.09, 6, 24);
   const pylonPositions = [
     [-coverRing, -coverRing], [coverRing, -coverRing],
     [-coverRing, coverRing], [coverRing, coverRing],
   ];
-  for (const [x, z] of pylonPositions) {
+  const rotate = ([x, z]) => [x * Math.cos(planet.layout) - z * Math.sin(planet.layout), x * Math.sin(planet.layout) + z * Math.cos(planet.layout)];
+  for (const [x, z] of pylonPositions.map(rotate)) {
     const group = new THREE.Group();
     const body = new THREE.Mesh(pylonGeo, coverMat);
     body.position.y = 1.9;
@@ -177,7 +179,8 @@ export function buildWorld(scene, arenaSize) {
   ];
   const barrierGeo = new THREE.CylinderGeometry(3, 3, 1.55, 10);
   const barrierInsetGeo = new THREE.TorusGeometry(2.45, 0.11, 6, 28);
-  for (const [x, z, rot] of barrierPositions) {
+  for (const [bx, bz, rot] of barrierPositions) {
+    const [x, z] = rotate([bx, bz]);
     const group = new THREE.Group();
     const body = new THREE.Mesh(barrierGeo, coverMat);
     body.position.y = 0.78;
@@ -239,6 +242,27 @@ export function buildWorld(scene, arenaSize) {
   }
   root.add(crates);
 
+  // 异星植被/矿石仅布置在可达边界外，保持装饰与碰撞的一致性；24 个实例只增一个 draw call。
+  if (planet.id !== 'station') {
+    let natureGeo;
+    if (planet.id === 'cryo') natureGeo = new THREE.ConeGeometry(1.2, 4.8, 5);
+    else if (planet.id === 'volcanic') natureGeo = new THREE.DodecahedronGeometry(1.5, 0);
+    else natureGeo = new THREE.SphereGeometry(1.7, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+    const natureMat = new THREE.MeshStandardMaterial({ color: planet.accent, emissive: planet.accent, emissiveIntensity: 0.12, roughness: 0.72, flatShading: true });
+    const nature = new THREE.InstancedMesh(natureGeo, natureMat, 24);
+    nature.name = `biome-${planet.id}`;
+    for (let i = 0; i < 24; i++) {
+      const along = (i % 6 - 2.5) * ARENA / 3.4;
+      const outside = ARENA + 3.4 + (i % 3) * 0.8;
+      const side = Math.floor(i / 6);
+      dummy.position.set(side < 2 ? along : (side === 2 ? -outside : outside), planet.id === 'cryo' ? 2 : 0.9, side < 2 ? (side === 0 ? -outside : outside) : along);
+      dummy.rotation.set(0, i * 1.37, planet.id === 'cryo' ? 0.12 : 0);
+      dummy.scale.setScalar(0.7 + (i % 4) * 0.15);
+      dummy.updateMatrix(); nature.setMatrixAt(i, dummy.matrix);
+    }
+    root.add(nature);
+  }
+
   // —— 每三个区域触发一次的双通道放电（75s 首次，之后每 90s）——
   const hazardMat = new THREE.MeshBasicMaterial({
     color: 0xff7a3e, transparent: true, opacity: 0,
@@ -255,8 +279,8 @@ export function buildWorld(scene, arenaSize) {
   }
   const hazardInfo = { cycle: -1, phase: 'calm', axis: 0, opacity: 0 };
   function eventAt(time) {
-    const firstAt = 75;
-    const every = 90;
+    const firstAt = planet.hazard.first;
+    const every = planet.hazard.every;
     if (time < firstAt) return { cycle: -1, phase: 'calm', axis: 0, progress: 0 };
     const elapsed = time - firstAt;
     const cycle = Math.floor(elapsed / every);
@@ -361,7 +385,7 @@ export function buildWorld(scene, arenaSize) {
 
   let t = 0;
   return {
-    root, reactor, stars, facility, colliders, coverMeshes, hazardInfo,
+    root, reactor, stars, facility, colliders, coverMeshes, hazardInfo, planetId: planet.id,
     textureStatus: textures.status,
     isSpawnClear(x, z, radius = 1) {
       if (Math.hypot(x, z) < 8.8 + radius) return false;
@@ -466,7 +490,7 @@ export function buildWorld(scene, arenaSize) {
         ? 0.08 + event.progress * 0.2 + Math.sin(t * 12) * 0.04
         : event.phase === 'active' ? 0.36 + Math.sin(t * 20) * 0.12 : 0;
       hazardInfo.opacity = Math.max(0, opacity);
-      hazardMat.color.setHex(event.phase === 'active' ? 0xff355d : 0xffb13e);
+      hazardMat.color.setHex(event.phase === 'active' ? planet.hazard.color : 0xffb13e);
       hazardMat.opacity = hazardInfo.opacity;
       hazardFloors.forEach((floor) => { floor.visible = visible; });
     },

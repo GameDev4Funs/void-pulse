@@ -16,6 +16,8 @@ export class Input {
 
     addEventListener('keydown', (e) => {
       if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      // 原生按钮的 Enter/Space 属于 UI 激活，不能同时触发开战/冲刺。
+      if (['Enter', 'Space'].includes(e.code) && e.target.closest?.('button, [role="button"], a[href]')) return;
       if (e.repeat) return;
       this.keys.add(e.code);
       this.pressed.add(e.code);

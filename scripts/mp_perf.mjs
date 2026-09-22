@@ -1,10 +1,13 @@
 // 四人联机性能回归：高敌人数下验证帧率、同步时钟、积压与控制台错误。
 import { spawn } from 'child_process';
 import puppeteer from 'puppeteer-core';
+import { isPlanetId } from '../js/planets.js';
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const externalUrl = process.argv[2];
 const URL = externalUrl || 'http://localhost:8134/index.html';
+const planet = process.argv[3] || 'station';
+if (!isPlanetId(planet)) throw new Error('Unknown planet: ' + planet);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const server = externalUrl ? null : spawn('python3', ['scripts/server.py', '8134'], { stdio: 'pipe' });
 const browsers = [];
@@ -65,6 +68,7 @@ async function click(page, id) {
 try {
   await sleep(800);
   const host = await newPage('host');
+  await host.click(`#title-planets [data-planet="${planet}"]`);
   await click(host, 'mp-btn');
   await click(host, 'mp-create-btn');
   await sleep(900);
@@ -114,6 +118,7 @@ try {
     const p95 = frameTimes.length ? frameTimes[Math.floor((frameTimes.length - 1) * 0.95)] : Infinity;
     return {
       state: game.state,
+      planet: game.planet.id,
       time: game.time,
       enemies: game.enemies.list.filter((enemy) => enemy.active).length,
       fpsAvg: samples.length ? samples.reduce((sum, value) => sum + value, 0) / samples.length : 0,
@@ -128,6 +133,7 @@ try {
   const maxFrameP95 = Math.max(...stats.map((stat) => stat.frameP95));
   const timeSpread = Math.max(...stats.map((stat) => stat.time)) - Math.min(...stats.map((stat) => stat.time));
   check('四端保持战斗状态', stats.every((stat) => stat.state === 'playing'));
+  check('四端星球规则一致', stats.every((stat) => stat.planet === planet), `（${planet}）`);
   check('四端都收到敌人世界', stats.every((stat) => stat.enemies > 0));
   check('四端平均帧率不低于 30 FPS', minAverageFps >= 30, `（最低 ${minAverageFps.toFixed(1)}）`);
   check('四端 95% 帧时间低于 34ms', maxFrameP95 < 34, `（最差 ${maxFrameP95.toFixed(1)}ms）`);

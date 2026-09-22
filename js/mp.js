@@ -3,13 +3,14 @@ import * as THREE from 'three';
 import { ENEMY_TYPES, PALETTE, ULT, PULSE, WALL_PAD, PLAYER } from './config.js';
 import { clamp, damp, dist2, rand } from './utils.js';
 import { attachShipArt, updateEnemyArt } from './actor_art.js';
+import { isPlanetId } from './planets.js';
 
 const PEER_COLORS = [0xffd23e, 0x4dff88, 0xff8ad8, 0x9fd8ff];
 const SNAP_RATE = 0.1;       // 世界快照 10Hz
 const POS_RATE = 1 / 20;     // 玩家位置 20Hz，消息小且直接影响操作观感
 const DMG_RATE = 1 / 30;     // 伤害事件按帧批量冲刷，避免高射速时产生大量小包
 const MAX_EXTRAPOLATION = 0.12;
-const HOST_EVENTS = new Set(['begin', 'snap', 'tele', 'sp', 'de', 'eb', 'ceb', 'web', 'gd', 'gp', 'hd', 'hpk', 'sup', 'supT', 'reactorReward', 'lv', 'ts', 'gov', 'blast', 'hostaway', 'hostback']);
+const HOST_EVENTS = new Set(['planet', 'begin', 'snap', 'tele', 'sp', 'de', 'eb', 'ceb', 'web', 'gd', 'gp', 'hd', 'hpk', 'sup', 'supT', 'reactorReward', 'lv', 'ts', 'gov', 'blast', 'hostaway', 'hostback']);
 
 // —— 队友战机（渲染 + 名牌，无本地逻辑）——
 class RemotePlayer {
@@ -280,7 +281,11 @@ export class MpSession {
         p.remote.setDead(p.dead);
         break;
       }
-      case 'begin': g.startMp(); break;
+      case 'planetRequest':
+        if (this.isHost && g.state === 'lobby' && this.peers.has(from)) this.send({ k: 'planet', id: g.planet.id });
+        break;
+      case 'planet': if (!this.isHost) g.selectPlanet(d.id, true); break;
+      case 'begin': if (!this.isHost && isPlanetId(d.planet)) g.startMp(d.planet); break;
       case 'snap': if (!this.isHost) this._applySnap(d); break;
       case 'tele': if (!this.isHost) g.enemies.netTelegraph(d.ty, d.x, d.z, d.el, d.du); break;
       case 'sp': if (!this.isHost) g.enemies.spawnNet(d.id, d.ty, d.x, d.z, d.el, d.gn, d.dm); break;

@@ -60,7 +60,7 @@
     </div>
   </div>
   <div id="hud-hints">ESC 暂停 · M 静音 · SPACE 冲刺 · Q 超载 · E 湮灭</div>
-  <div id="objective"><div class="eyebrow">REACTOR / 战场目标</div><div id="objective-title"></div><div class="bar"><div id="objective-fill"></div></div><div id="objective-detail"></div><div id="wave-status"></div></div>
+  <div id="objective"><div class="eyebrow" id="planet-label">能源母港 / 战场目标</div><div id="objective-title"></div><div class="bar"><div id="objective-fill"></div></div><div id="objective-detail"></div><div id="wave-status"></div></div>
   <div id="radar-wrap"><div class="eyebrow">TACTICAL / N ↑</div><canvas id="radar" width="160" height="160" aria-label="战术小地图"></canvas><div id="aim-mode"></div></div>
   <div id="field-hint"></div>
 </div>
@@ -79,10 +79,11 @@
   <div class="title-core">
     <div id="game-logo">VOID<span>PULSE</span></div>
     <div id="game-sub">霓 虹 深 渊 · 幸 存 者</div>
-    <div class="title-desc">夺取反应堆，穿越放电带，在虫潮中守住最后的能源站。<br>构筑流派 · 进化武器 · 团队急速 —— 每一次回到中心，都是一次反击。</div>
+    <div class="title-desc">从能源母港跃向异星战场，构筑你的生存路线。<br>夺取反应堆 · 进化武器 · 星球特性 · 小队协作</div>
+    <section class="planet-picker" id="title-planets" aria-label="选择出击星球"></section>
     <div class="title-btns">
-      <div id="start-btn" class="big-btn">单 机 出 击</div>
-      <div id="mp-btn" class="big-btn big-btn-alt">组 队 联 机</div>
+      <button type="button" id="start-btn" class="big-btn">单 机 出 击</button>
+      <button type="button" id="mp-btn" class="big-btn big-btn-alt">组 队 联 机</button>
     </div>
     <!-- 联机面板 -->
     <div id="mp-panel" class="hidden">
@@ -91,7 +92,7 @@
       </div>
       <div class="mp-row mp-split">
         <div class="mp-col">
-          <div id="mp-create-btn" class="small-btn">创建房间</div>
+          <button type="button" id="mp-create-btn" class="small-btn">创建房间</button>
           <div class="mp-hint">自动生成房名和密码</div>
         </div>
         <div class="mp-col">
@@ -99,7 +100,7 @@
             <input id="mp-room" class="mp-input" maxlength="14" placeholder="房名 如 NEBULA-42" autocomplete="off">
             <input id="mp-pass" class="mp-input" maxlength="6" placeholder="密码 4 位" autocomplete="off">
           </div>
-          <div id="mp-join-btn" class="small-btn">加入房间</div>
+          <button type="button" id="mp-join-btn" class="small-btn">加入房间</button>
         </div>
       </div>
       <div id="mp-status"></div>
@@ -128,9 +129,10 @@
       <div class="mp-hint">同一局域网的朋友打开本页面 → 组队联机 → 输入房名密码即可加入</div>
     </div>
     <div id="lobby-players"></div>
-    <div id="lobby-start-btn" class="big-btn hidden">开 战 [Enter]</div>
+    <section class="planet-picker" id="lobby-planets" aria-label="房主选择出击星球"></section>
+    <button type="button" id="lobby-start-btn" class="big-btn hidden">开 战 [Enter]</button>
     <div id="lobby-wait" class="mp-hint hidden">等待房主开战…</div>
-    <div id="lobby-quit-btn" class="small-btn">离开房间</div>
+    <button type="button" id="lobby-quit-btn" class="small-btn">离开房间</button>
   </div>
 </div>
 

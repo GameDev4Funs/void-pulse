@@ -29,7 +29,7 @@ export class TacticalHud {
     const within = g.time % DIRECTOR.waveSeconds;
     const until = (phase === 'advance' ? DIRECTOR.surgeAt : phase === 'surge' ? DIRECTOR.respiteAt : DIRECTOR.waveSeconds) - within;
     const hazard = g.world.hazardInfo;
-    this.wave.textContent = hazard.phase !== 'calm' ? (hazard.phase === 'warning' ? '⚠ 放电预警 · 离开橙色区域' : '⚡ 放电中 · 避开红色区域')
+    this.wave.textContent = hazard.phase !== 'calm' ? (hazard.phase === 'warning' ? `⚠ ${g.planet.hazard.name}预警 · 离开闪烁区域` : `⚡ ${g.planet.hazard.name} · 避开亮色区域`)
       : `${{ advance: '推进', surge: '虫潮高峰', respite: '喘息 · 回收碎片' }[phase]} · ${Math.ceil(until)}s`;
     this.hint.textContent = g.mp?.hostAway ? '房主暂离 · 全队已暂停'
       : g.time < 18 ? 'WASD 移动 · SPACE 冲刺避伤 · 自动开火 · F 切换瞄准'
@@ -51,7 +51,7 @@ export class TacticalHud {
     const dot = (x, z, r, color) => { c.fillStyle = color; c.beginPath(); c.arc(xy(x), xy(z), r, 0, Math.PI * 2); c.fill(); };
     const hz = g.world.hazardInfo;
     if (hz.phase !== 'calm') {
-      c.fillStyle = hz.phase === 'active' ? '#ef355866' : '#ffaa3355';
+      c.fillStyle = hz.phase === 'active' ? `#${g.planet.hazard.color.toString(16).padStart(6, '0')}88` : '#ffaa3355';
       const offset = Math.min(21, g.arena * 0.31), width = Math.min(11, g.arena * 0.18);
       for (const sign of [-1, 1]) {
         if (hz.axis === 0) c.fillRect(xy(sign * offset - width / 2), margin, width * scale, size - margin * 2);
