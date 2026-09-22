@@ -397,7 +397,7 @@ await A.evaluate(() => {
   g.enemies.reset(); g.enemies.spawnT = 9999;
   g.time = 24; g.reactor.cycle = 0; g.reactor.charge = 6.99;
 });
-await sleep(600);
+await settle(B, () => window.__DBG.game.reactor.captures === 1 && window.__DBG.game.player.stats.hp >= 68);
 for (const [tag, page] of [['主机', A], ['客机', B]]) {
   check(`${tag}反应堆奖励与团队急速`, await page.evaluate(() => {
     const g = window.__DBG.game;
@@ -463,13 +463,14 @@ check('经验池满仍保留当前块经验', await A.evaluate(() => {
   return awarded === 13;
 }));
 await A.evaluate(() => window.__DBG.giveXp(12));
-await sleep(200);
+await settle(B, () => window.__DBG.game.cardOpen && window.__DBG.game.pendingCards?.length === 3);
 check('联机卡片不再用全屏遮罩挡住战斗', await B.evaluate(() => {
   const g = window.__DBG.game, el = document.getElementById('levelup-screen');
   return g.cardOpen && el.classList.contains('mp-cards') && getComputedStyle(el).pointerEvents === 'none';
 }));
 check('联机卡片入场动画期间不可误点', await B.evaluate(() => {
   const g = window.__DBG.game;
+  if (!g.pendingCards) return false;
   g.ui.showLevelUp(g.pendingCards, g.pendingCards.map((c) => g.upgrades.cardView(c)), (i) => g.pickCard(i));
   return [...document.querySelectorAll('#cards .card')].every((el) => getComputedStyle(el).pointerEvents === 'none');
 }));
