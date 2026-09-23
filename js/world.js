@@ -1,7 +1,7 @@
 // ============ 场景世界：能源设施 / 掩体 / 放电通道 / 围墙 ============
 import * as THREE from 'three';
 import { PALETTE } from './config.js';
-import { rand } from './utils.js';
+import { rand, segmentCircleHitFraction } from './utils.js';
 import { createWorldTextures } from './world_textures.js';
 import { getPlanet } from './planets.js';
 
@@ -277,7 +277,7 @@ export function buildWorld(scene, arenaSize, planet = getPlanet('station')) {
     root.add(floor);
     hazardFloors.push(floor);
   }
-  const hazardInfo = { cycle: -1, phase: 'calm', axis: 0, opacity: 0 };
+  const hazardInfo = { cycle: -1, phase: 'calm', axis: 0, opacity: 0, offset: Math.min(21, ARENA * 0.31), width: Math.min(11, ARENA * 0.18), central: false };
   function eventAt(time) {
     const firstAt = planet.hazard.first;
     const every = planet.hazard.every;
@@ -289,10 +289,13 @@ export function buildWorld(scene, arenaSize, planet = getPlanet('station')) {
     if (within < 14) return { cycle, phase: 'active', axis: cycle % 2, progress: (within - 5) / 9 };
     return { cycle, phase: 'calm', axis: cycle % 2, progress: 0 };
   }
-  function layoutHazards(axis) {
-    const offset = Math.min(21, ARENA * 0.31);
+  function layoutHazards(axis, cycle = 0) {
+    // 熔核的隔次喷发穿过中心。五秒预警给占点玩家明确撤离窗口。
+    const central = planet.id === 'volcanic' && cycle % 2 === 1;
+    const offset = central ? 0 : Math.min(21, ARENA * 0.31);
     const width = Math.min(11, ARENA * 0.18);
-    const length = ARENA * 2 - 5;
+    Object.assign(hazardInfo, { offset, width, central });
+    const length = ARENA * 2;
     hazardFloors.forEach((floor, i) => {
       const side = i === 0 ? -1 : 1;
       floor.position.x = axis === 0 ? side * offset : 0;
@@ -402,6 +405,11 @@ export function buildWorld(scene, arenaSize, planet = getPlanet('station')) {
       }
       return false;
     },
+    projectileHitFraction(x0, z0, x1, z1, radius = 0.15) {
+      let first = Infinity;
+      for (const c of colliders) first = Math.min(first, segmentCircleHitFraction(x0, z0, x1, z1, c.x, c.z, c.r + radius));
+      return first;
+    },
     resolveCircle(position, radius, velocity) {
       let hit = false;
       for (let pass = 0; pass < 2; pass++) {
@@ -451,8 +459,8 @@ export function buildWorld(scene, arenaSize, planet = getPlanet('station')) {
     },
     hazardAt(x, z) {
       if (hazardInfo.phase !== 'active') return false;
-      const offset = Math.min(21, ARENA * 0.31);
-      const halfWidth = Math.min(11, ARENA * 0.18) / 2;
+      const offset = hazardInfo.offset;
+      const halfWidth = hazardInfo.width / 2;
       return hazardInfo.axis === 0
         ? Math.abs(Math.abs(x) - offset) <= halfWidth
         : Math.abs(Math.abs(z) - offset) <= halfWidth;
@@ -484,7 +492,7 @@ export function buildWorld(scene, arenaSize, planet = getPlanet('station')) {
       hazardInfo.cycle = event.cycle;
       hazardInfo.phase = event.phase;
       hazardInfo.axis = event.axis;
-      layoutHazards(event.axis);
+      layoutHazards(event.axis, event.cycle);
       const visible = event.phase !== 'calm';
       const opacity = event.phase === 'warning'
         ? 0.08 + event.progress * 0.2 + Math.sin(t * 12) * 0.04
@@ -492,7 +500,7 @@ export function buildWorld(scene, arenaSize, planet = getPlanet('station')) {
       hazardInfo.opacity = Math.max(0, opacity);
       hazardMat.color.setHex(event.phase === 'active' ? planet.hazard.color : 0xffb13e);
       hazardMat.opacity = hazardInfo.opacity;
-      hazardFloors.forEach((floor) => { floor.visible = visible; });
+      hazardFloors.forEach((floor, i) => { floor.visible = visible && (!hazardInfo.central || i === 0); });
     },
     dispose() {
       const geometries = new Set();

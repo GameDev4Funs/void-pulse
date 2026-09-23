@@ -20,7 +20,7 @@ export const PALETTE = {
   bomber: 0xff2e2e,
   hunter: 0xff2e88,
   weaver: 0x7dff5f,
-  webZone: 0x7dff5f,
+  webZone: 0xed62ae,
   stormZone: 0xc77bff,
   supply: 0xffd23e,
   elite: 0xffffff,
@@ -110,7 +110,7 @@ export const ULT = {
   bossBonus: 40,        // 击杀 Boss 额外充能
   inflation: 0.35,      // 每用一次充能效率 -35%×次数
   dmg: 500,             // 对普通敌人
-  bossFrac: 0.12,       // 对 Boss 最大生命比例
+  bossFrac: 0.25,       // 对 Boss 最大生命比例
   slowmoScale: 0.15,
   slowmoTime: 1.2,
 };
@@ -147,14 +147,19 @@ export const SPAWN_WEIGHTS = [
 // 重型与远程敌人消耗更多威胁预算，避免解锁后同样频率下强度骤增。
 export const SPAWN_COST = { chaser: 1, speeder: 1, bomber: 1.4, splitter: 1.6, shooter: 1.8, hunter: 1.8, tank: 2.8, weaver: 2.4 };
 
-export const XP_CURVE = (level) => Math.floor(6 + level * 4.5 + level * level * 0.35);
+// LV20 后按边界斜率近似线性延续，避免无尽模式升级成本二次膨胀。
+export const XP_CURVE = (level) => level <= 20
+  ? Math.floor(6 + level * 4.5 + level * level * 0.35)
+  : 236 + 19 * (level - 20);
 
 export const PULSE = {
   max: 100,
   perKill: 3.2,
   perBossKill: 100,
   damage: 85,
-  maxHpBonus: 0.28,   // 附加敌人最大生命百分比
+  maxHpBonus: 0.08,   // Q 以救场为主，Boss 爆发交给 E
+  skillKillChargeMul: 0.25, // 技能击杀仅返还四分之一 Q 能量
+  skillRefundCap: 25,      // 单次技能普通击杀最多返还25，Boss奖励例外
   radius: 17,
   invuln: 1.2,
   slowmoScale: 0.22,

@@ -203,11 +203,11 @@ body.in-combat #app canvas { cursor: url('../assets/ui/crosshair.svg') 16 16, cr
 .planet-code { font-size: 9px; letter-spacing: 1px; color: var(--planet-color); }
 .planet-biome { font-size: 10px; line-height: 1.5; }
 .planet-orb { display: block; width: 40px; height: 40px; margin: 0 auto 8px; border-radius: 50%;
-  background: radial-gradient(circle at 28% 25%, #bedaff44, transparent 45%), url('../assets/textures/floor-alloy-v1.jpg') center / 85px;
+  background: radial-gradient(circle at 28% 25%, #bedaff44, transparent 45%), url('../assets/ui/planet-station.jpg') center / 85px;
   box-shadow: inset -12px -5px 14px #000c, 0 0 12px #62d5ff22; border: 1px solid var(--planet-color); }
-.planet-cryo .planet-orb { background-image: url('../assets/planets/cryogenic-ground-v1.jpg'); }
-.planet-volcanic .planet-orb { background-image: url('../assets/planets/volcanic-ground-v1.jpg'); }
-.planet-mycelium .planet-orb { background-image: url('../assets/planets/mycelium-ground-v1.jpg'); }
+.planet-cryo .planet-orb { background-image: url('../assets/ui/planet-cryo.jpg'); }
+.planet-volcanic .planet-orb { background-image: url('../assets/ui/planet-volcanic.jpg'); }
+.planet-mycelium .planet-orb { background-image: url('../assets/ui/planet-mycelium.jpg'); }
 .planet-brief { min-height: 62px; padding: 10px 12px; margin-top: 8px; border-left: 2px solid #415a71; background: #0a122199; line-height: 1.7; }
 .planet-brief strong, .planet-brief span, .planet-brief small { display: block; }
 .planet-brief strong { font-size: 12px; font-weight: 500; }
@@ -398,4 +398,81 @@ button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
   .title-btns { flex-direction: column; align-items: center; }
   .mp-split { flex-direction: column; }
   .lobby-panel { min-width: 0; width: 92vw; }
+}
+
+/* Accessible menus, build inspection, and motion preferences. */
+select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
+.settings-panel select { background: #102333; border: 1px solid #426577; color: #d9f7ff; padding: 8px; font: inherit; max-width: 60%; }
+#combat-tools { position: fixed; z-index: 36; right: 20px; bottom: 58px; display: flex; gap: 8px; }
+#combat-tools .utility-btn { position: static; }
+#mission-status { margin-top: 8px; font-size: 11px; line-height: 1.5; color: #b6f2c9; }
+.dialog-note { margin-top: 14px; font-size: 13px; color: #afc6d7; line-height: 1.8; }
+.menu-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.menu-actions .small-btn { letter-spacing: 1px; padding: 8px 16px; }
+#pause-screen { z-index: 45; }
+#build-screen { z-index: 60; }
+.build-panel { width: min(1000px,94vw); padding: 28px; text-align: left; margin: auto; }
+.build-panel h2 { color: #d9f7ff; font-size: 27px; }
+.build-panel h3 { color: #b9e9ff; margin: 22px 0 10px; font-size: 17px; }
+#build-note, .build-help { color: #9bb8c8; margin-top: 8px; font-size: 12px; line-height: 1.7; }
+.build-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.build-item { padding: 12px; border: 1px solid #284454; border-radius: 6px; background: #0e1b28; }
+.build-item.unowned { border-style: dashed; background: #0a1320; }
+.build-item-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.build-item-heading b { color: #d4e9f8; font-size: 14px; }
+.build-item-heading span { color: #6dd5e9; white-space: nowrap; font-size: 11px; }
+.build-item p { font-size: 12px; color: #c0d5e5; line-height: 1.8; margin-top: 6px; }
+.build-item .build-next { color: #90b2c5; }
+.build-item .build-recipe { border-top: 1px solid #294150; padding-top: 6px; color: #dfc187; }
+.build-route { border-left: 2px solid var(--route-c); margin-top: 12px; padding: 8px 12px; background: #0b1724; }
+.build-route b { color: var(--route-c); font-size: 14px; }
+.build-route p { color: #8098aa; line-height: 1.8; font-size: 12px; margin-top: 4px; }
+.build-route p.unlocked { color: #d2e5f2; }
+.build-heading { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; background: #060914; }
+#build-close { margin: 0; font-size: 12px; padding: 10px 16px; letter-spacing: 1px; flex-shrink: 0; }
+button.lr-code { border: 0; display: block; width: 100%; background: transparent; font-family: inherit; }
+button.card { display: block; text-align: left; font-family: inherit; color: #d7eaff; max-height: 64vh; overflow-y: auto; }
+button.card:focus-visible { outline: 3px solid var(--cyan); outline-offset: 4px; }
+button.card:disabled { opacity: 1; }
+.c-detail, .c-recipe { font-size: 11px; line-height: 1.6; margin-top: 10px; color: #a0cadc; }
+.c-recipe { border-top: 1px solid #345063; padding-top: 8px; color: #dfc187; }
+.levelup-actions { display: flex; align-items: baseline; justify-content: center; gap: 10px; pointer-events: auto; }
+.levelup-actions .small-btn { letter-spacing: 1px; padding: 9px 16px; }
+.mp-cards button.card { max-height: 44vh; }
+.mp-cards .c-detail, .mp-cards .c-recipe { font-size: 10px; margin-top: 6px; }
+.mp-cards #cards-build-btn { margin-top: 8px; }
+#go-summary { margin: 20px 0 6px; text-align: left; max-width: 640px; color: #afc9db; font-size: 12px; line-height: 1.8; }
+#go-summary p + p { margin-top: 8px; }
+.damage-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; }
+.damage-summary b { color: #8be1f2; }
+#go-title.victory { color: #4dff88; text-shadow: 0 0 20px #4dff8866; }
+#continue-endless-btn { display: block; margin: 20px auto 0; font-size: 17px; letter-spacing: 2px; }
+.touch-btn { font-size: 15px; touch-action: none; }
+#stick-zone { touch-action: none; }
+body.reduced-motion *, body.reduced-motion *::before, body.reduced-motion *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+body.reduced-motion #chain.pop { transform: none; }
+body.reduced-motion #flash { opacity: 0 !important; }
+@media (max-width: 760px) {
+  #combat-tools { right: 10px; bottom: 54px; gap: 5px; }
+  #combat-tools .utility-btn { padding: 6px 9px; font-size: 11px; }
+  .build-grid { grid-template-columns: 1fr; }
+  .build-panel { padding: 18px; }
+  button.card { width: min(300px, 86vw); max-height: 56vh; }
+  .mp-cards button.card { width: 30vw; max-height: 40vh; }
+  .levelup-actions .small-btn { font-size: 11px; padding: 8px 12px; }
+  #go-stats { gap: 10px 16px; }
+  #go-stats .st { font-size: 12px; }
+}
+@media (pointer: coarse) {
+  #combat-tools { bottom: auto; top: 88px; }
+  #settings-btn { bottom: 10px; }
+  .mp-cards .c-detail, .mp-cards .c-recipe { font-size: 10px; }
+}
+@media (max-height: 500px) {
+  .mp-cards button.card { max-height: 46vh; }
+  .mp-cards .levelup-actions .small-btn { margin-top: 6px; padding: 5px 10px; }
+}
+
+@media (pointer: coarse) and (min-height: 600px) {
+  #hud #field-hint { display: block; top: 284px; bottom: auto; width: 92vw; font-size: 11px; line-height: 1.6; }
 }

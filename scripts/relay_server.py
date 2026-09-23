@@ -14,6 +14,10 @@ import sys
 WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 MAX_MEMBERS = 4
 MAX_PENDING_FRAMES = 128
+HOST_EVENTS = frozenset(('planet', 'begin', 'snap', 'tele', 'sp', 'de', 'eb', 'ceb', 'web',
+                         'gd', 'gp', 'hd', 'hpk', 'sup', 'supT', 'reactorReward', 'lv', 'ts',
+                         'gov', 'blast', 'hostaway', 'hostback', 'peeraway', 'peerback',
+                         'forcedeath', 'mission', 'endless', 'bossWindup', 'lobby'))
 
 rooms = {}            # name -> {'password': str, 'host': int, 'members': {id: Member}}
 rooms_lock = threading.Lock()
@@ -243,7 +247,9 @@ def handle_message(member, msg):
             return
         error = None
         with rooms_lock:
-            if room_name in rooms:
+            if member.room is not None:
+                error = '已在房间中，请先离开当前房间'
+            elif room_name in rooms:
                 error = '房间名已存在，换一个'
             else:
                 rooms[room_name] = {
@@ -268,7 +274,9 @@ def handle_message(member, msg):
         host_id = 0
         with rooms_lock:
             room = rooms.get(room_name)
-            if not room:
+            if member.room is not None:
+                error = '已在房间中，请先离开当前房间'
+            elif not room:
                 error = '房间不存在'
             elif room['password'] != password:
                 error = '密码错误'
@@ -302,7 +310,10 @@ def handle_message(member, msg):
         recipients = []
         with rooms_lock:
             room = rooms.get(member.room) if member.room else None
-            if room:
+            data = msg.get('data')
+            if room and isinstance(data, dict):
+                if data.get('k') in HOST_EVENTS and member.id != room['host']:
+                    return
                 recipients = [m for m in room['members'].values() if m.id != member.id]
         if recipients:
             broadcast(recipients, {'t': 'msg', 'from': member.id, 'data': msg.get('data')})

@@ -314,7 +314,7 @@ await A.evaluate(() => {
   const mp = window.__DBG.game.mp;
   window.__dmgCount = 0;
   const orig = mp._applyDmgEvents.bind(mp);
-  mp._applyDmgEvents = (l) => { window.__dmgCount += l.length; orig(l); };
+  mp._applyDmgEvents = (from, list) => { window.__dmgCount += list.length; orig(from, list); };
 });
 await B.mouse.move(700, 300);
 await sleep(4000);
@@ -341,9 +341,9 @@ check('过期代际伤害不会串到复用池位', await A.evaluate(() => {
   const e = g.enemies.list.find((enemy) => enemy.active && !enemy.dying && enemy.hp > 2);
   if (!e) return false;
   const hp = e.hp;
-  g.mp._applyDmgEvents([[e.netId, e.generation - 1, 9999, 0, 0, 0, 0]]);
+  g.mp._applyDmgEvents([...g.mp.peers.keys()][0], [[e.netId, e.generation - 1, 9999, 0, 0, 0, 0]]);
   if (e.hp !== hp) return false;
-  g.mp._applyDmgEvents([[e.netId, e.generation, 1, 0, 0, 0, 0]]);
+  g.mp._applyDmgEvents([...g.mp.peers.keys()][0], [[e.netId, e.generation, 1, 0, 0, 0, 0]]);
   return e.hp === hp - 1;
 }));
 

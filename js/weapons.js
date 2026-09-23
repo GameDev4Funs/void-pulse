@@ -1,7 +1,7 @@
 // ============ 玩家武器系统：脉冲枪 / 轨道刃 / 追踪导弹 / 特斯拉电弧 / 新星爆发 ============
 import * as THREE from 'three';
 import { PALETTE } from './config.js';
-import { rand, dist2 } from './utils.js';
+import { rand, dist2, segmentCircleHitFraction } from './utils.js';
 
 // —— 武器等级表 ——
 export const WEAPON_TABLES = {
@@ -50,7 +50,7 @@ export const MAX_WEAPON_LV = 5;
 
 // —— 进化形态（满级武器 + 对应被动 → 金色进化卡）——
 export const EVO_TABLES = {
-  blaster:  { dmg: 72, rate: 2.6, shots: 1, pierce: 99, scale: 2.7, knock: 12 },
+  blaster:  { dmg: 160, rate: 2.8, shots: 1, pierce: 99, scale: 2.7, knock: 12 },
   blades:   { n: 8, dmg: 70, radius: 5.0, rot: 6.0, flingCd: 2.6, flingDmg: 42 },
   missiles: { cd: 1.8, n: 8, dmg: 40, aoe: 3.8, bomblets: 2, bombletDmg: 22, bombletAoe: 2.2 },
   tesla:    { cd: 0.7, chains: 12, dmg: 60, zoneR: 2.8, zoneDur: 3.0, zoneTick: 15 },
@@ -141,6 +141,7 @@ export class Weapons {
     this.bomblets = [];
 
     this._queryBuf = new Array(64);
+    this._bulletHits = [];
     this._v1 = new THREE.Vector3();
     this.reset();
   }
@@ -212,39 +213,39 @@ export class Weapons {
       );
     }
 
-    // 子弹飞行 + 碰撞
+    // 扫掠整段路径；先按命中距离排序，掩体后的敌人不能被穿透弹命中。
     const hash = g.enemyHash;
+    const hits = this._bulletHits;
     for (const b of this.bullets) {
       if (!b.active) continue;
+      const x0 = b.pos.x, z0 = b.pos.z;
+      const step = Math.min(dt, Math.max(0, b.life));
       b.life -= dt;
-      b.pos.addScaledVector(b.vel, dt);
-      if (b.life <= 0
-        || Math.abs(b.pos.x) > g.arena + 4
-        || Math.abs(b.pos.z) > g.arena + 4
-        || g.world.blocksProjectile(b.pos.x, b.pos.z, 0.16)) {
-        b.active = false; b.mesh.visible = false; b.hitSet.clear();
-        continue;
-      }
-      b.mesh.position.copy(b.pos);
-      if (evo) {
-        // 湮灭光束尾迹
-        g.particles.spawn(b.pos.x, b.pos.y, b.pos.z, rand(-0.5, 0.5), rand(0, 0.5), rand(-0.5, 0.5), 0.22, 1.2, 0xb084ff, 5, 0);
-      }
-      const cnt = hash.query(b.pos.x, b.pos.z, 3.0, this._queryBuf);
+      b.pos.addScaledVector(b.vel, step);
+      const radius = 0.35 * b.mesh.scale.x;
+      const wallT = g.world.projectileHitFraction(x0, z0, b.pos.x, b.pos.z, radius);
+      const length = Math.hypot(b.pos.x - x0, b.pos.z - z0);
+      const cnt = hash.query((x0 + b.pos.x) / 2, (z0 + b.pos.z) / 2, length / 2 + radius + 3.6, this._queryBuf);
+      hits.length = 0;
       for (let i = 0; i < cnt; i++) {
         const e = this._queryBuf[i];
         if (!e.active || e.dying || b.hitSet.has(e)) continue;
-        const rr = e.radius + 0.35 * b.mesh.scale.x;
-        if (dist2(b.pos.x, b.pos.z, e.pos.x, e.pos.z) < rr * rr) {
-          b.hitSet.add(e);
-          g.damageEnemy(e, b.dmg, { crit: b.crit, knock: b.knock, kx: b.vel.x, kz: b.vel.z });
-          g.particles.burst(b.pos.x, 0.7, b.pos.z, evo ? 9 : 4, evo ? 0xb084ff : PALETTE.bullet, { speed: 5, life: 0.3, size: 0.5, up: 1.5 });
-          if (b.hitSet.size > b.pierce) {
-            b.active = false; b.mesh.visible = false; b.hitSet.clear();
-            break;
-          }
-        }
+        const t = segmentCircleHitFraction(x0, z0, b.pos.x, b.pos.z, e.pos.x, e.pos.z, e.radius + radius);
+        if (t < wallT && t <= 1) hits.push({ e, t });
       }
+      hits.sort((a, b) => a.t - b.t);
+      for (const { e, t } of hits) {
+        if (!e.active || e.dying) continue;
+        b.hitSet.add(e);
+        g.damageEnemy(e, b.dmg, { crit: b.crit, knock: b.knock, kx: b.vel.x, kz: b.vel.z, damageKind: b.damageKind });
+        g.particles.burst(x0 + (b.pos.x - x0) * t, 0.7, z0 + (b.pos.z - z0) * t,
+          evo ? 9 : 4, evo ? 0xb084ff : PALETTE.bullet, { speed: 5, life: 0.3, size: 0.5, up: 1.5 });
+        if (b.hitSet.size > b.pierce) { b.active = false; break; }
+      }
+      if (wallT <= 1 || b.life <= 0 || Math.abs(b.pos.x) > g.arena + 4 || Math.abs(b.pos.z) > g.arena + 4) b.active = false;
+      if (!b.active) { b.mesh.visible = false; b.hitSet.clear(); continue; }
+      b.mesh.position.copy(b.pos);
+      if (evo) g.particles.spawn(b.pos.x, b.pos.y, b.pos.z, rand(-0.5, 0.5), rand(0, 0.5), rand(-0.5, 0.5), 0.22, 1.2, 0xb084ff, 5, 0);
     }
   }
 
@@ -265,7 +266,7 @@ export class Weapons {
   }
 
   // 通用子弹生成（飞刃风暴也复用）
-  spawnBullet({ x, z, dx, dz, speed, dmg, crit, pierce, life, scale = 1, knock = 4 }) {
+  spawnBullet({ x, z, dx, dz, speed, dmg, crit, pierce, life, scale = 1, knock = 4, damageKind = 'blaster' }) {
     const b = this.bullets.find((q) => !q.active);
     if (!b) return;
     b.active = true;
@@ -274,7 +275,8 @@ export class Weapons {
     b.dmg = dmg; b.crit = crit;
     b.pierce = pierce;
     b.life = life;
-    b.knock = knock;
+    b.knock = knock; b.damageKind = damageKind;
+    b.hitSet.clear();
     b.mesh.visible = true;
     b.mesh.position.copy(b.pos);
     b.mesh.lookAt(this._v1.copy(b.pos).add(b.vel));
@@ -289,7 +291,8 @@ export class Weapons {
     const g = this.game, p = g.player;
     const evo = this.evolved.blades;
     const cfg = this.cfg('blades');
-    this.bladeAngle += dt * cfg.rot;
+    const rate = this.rateMul();
+    this.bladeAngle += dt * cfg.rot * rate;
     // 进化：周期性全方位飞刃
     if (evo) {
       this.timers.fling -= dt;
@@ -302,7 +305,7 @@ export class Weapons {
             x: p.pos.x, z: p.pos.z,
             dx: Math.sin(a), dz: Math.cos(a), speed: 30,
             dmg: this.finalDmg(cfg.flingDmg, crit), crit,
-            pierce: 99, life: 0.9, scale: 1.8, knock: 6,
+            pierce: 99, life: 0.9, scale: 1.8, knock: 6, damageKind: 'fling',
           });
         }
         g.audio.missile();
@@ -321,13 +324,13 @@ export class Weapons {
       for (let j = 0; j < cnt; j++) {
         const e = this._queryBuf[j];
         if (!e.active || e.dying) continue;
-        if (g.time - (e.lastBladeHit || -1) < 0.38) continue;
+        if (g.time - (e.lastBladeHit ?? -Infinity) < 0.38 / rate) continue;
         const rr = e.radius + 0.8;
         if (dist2(m.position.x, m.position.z, e.pos.x, e.pos.z) < rr * rr) {
           e.lastBladeHit = g.time;
           const crit = this.rollCrit();
           const kx = e.pos.x - p.pos.x, kz = e.pos.z - p.pos.z;
-          g.damageEnemy(e, this.finalDmg(cfg.dmg, crit), { crit, knock: 7, kx, kz });
+          g.damageEnemy(e, this.finalDmg(cfg.dmg, crit), { crit, knock: 7, kx, kz, damageKind: 'blades' });
           g.particles.burst(m.position.x, 0.7, m.position.z, 5, PALETTE.blade, { speed: 6, life: 0.3, size: 0.5 });
           g.audio.enemyHit();
         }
@@ -403,7 +406,7 @@ export class Weapons {
   explodeMissile(m) {
     const g = this.game;
     m.active = false; m.mesh.visible = false;
-    g.areaDamage(m.pos.x, m.pos.z, m.aoe, m.dmg, { crit: m.crit, knock: 9 });
+    g.areaDamage(m.pos.x, m.pos.z, m.aoe, m.dmg, { crit: m.crit, knock: 9, damageKind: 'missiles' });
     g.particles.burst(m.pos.x, 0.6, m.pos.z, 16, 0x6ef3ff, { speed: 9, life: 0.5, size: 0.7 });
     g.particles.burst(m.pos.x, 0.6, m.pos.z, 8, 0xff9f3e, { speed: 6, life: 0.4, size: 0.6 });
     g.shockwaves.fire(m.pos.x, m.pos.z, m.aoe, 0x6ef3ff, 0.4);
@@ -429,7 +432,7 @@ export class Weapons {
       b.t -= dt;
       if (b.t > 0) continue;
       this.bomblets.splice(i, 1);
-      g.areaDamage(b.x, b.z, b.aoe, b.dmg, { knock: 6 });
+      g.areaDamage(b.x, b.z, b.aoe, b.dmg, { knock: 6, damageKind: 'missiles' });
       g.particles.burst(b.x, 0.5, b.z, 10, 0xff9f3e, { speed: 7, life: 0.4, size: 0.6 });
       g.shockwaves.fire(b.x, b.z, b.aoe, 0xff9f3e, 0.35);
       g.audio.explode();
@@ -468,7 +471,7 @@ export class Weapons {
     for (const e of chain) {
       this.fireBolt(px, py, pz, e.pos.x, 0.8, e.pos.z);
       const crit = this.rollCrit();
-      g.damageEnemy(e, this.finalDmg(cfg.dmg, crit), { crit, knock: 1.5, kx: e.pos.x - px, kz: e.pos.z - pz });
+      g.damageEnemy(e, this.finalDmg(cfg.dmg, crit), { crit, knock: 1.5, kx: e.pos.x - px, kz: e.pos.z - pz, damageKind: 'tesla' });
       g.particles.burst(e.pos.x, 0.8, e.pos.z, 5, PALETTE.tesla, { speed: 4, life: 0.25, size: 0.5 });
       if (evo) this.dropStormZone(e.pos.x, e.pos.z, cfg);
       px = e.pos.x; pz = e.pos.z; py = 0.8;
@@ -496,7 +499,7 @@ export class Weapons {
       zn.tickT -= dt;
       if (zn.tickT <= 0) {
         zn.tickT = 0.4;
-        g.areaDamage(zn.x, zn.z, zn.r, this.finalDmg(zn.dmg, false), { knock: 0 });
+        g.areaDamage(zn.x, zn.z, zn.r, this.finalDmg(zn.dmg, false), { knock: 0, damageKind: 'storm' });
         if (Math.random() < 0.5) {
           g.particles.burst(zn.x + rand(-zn.r / 2, zn.r / 2), 0.4, zn.z + rand(-zn.r / 2, zn.r / 2), 2, PALETTE.stormZone, { speed: 2, life: 0.3, size: 0.5, grav: 4 });
         }
@@ -554,7 +557,7 @@ export class Weapons {
     const crit = this.rollCrit();
     if (evo) {
       // 引力坍缩：把敌人往中心拽 + 爆发 + 护盾
-      g.areaDamage(p.pos.x, p.pos.z, cfg.radius, this.finalDmg(cfg.dmg, crit), { crit, knock: -cfg.pull, fromX: p.pos.x, fromZ: p.pos.z });
+      g.areaDamage(p.pos.x, p.pos.z, cfg.radius, this.finalDmg(cfg.dmg, crit), { crit, knock: -cfg.pull, fromX: p.pos.x, fromZ: p.pos.z, damageKind: 'nova' });
       g.shockwaves.fire(p.pos.x, p.pos.z, cfg.radius, 0xffffff, 0.7);
       g.shockwaves.fire(p.pos.x, p.pos.z, cfg.radius * 0.7, PALETTE.nova, 0.55);
       g.particles.burst(p.pos.x, 0.6, p.pos.z, 50, PALETTE.nova, { speed: 18, life: 0.7, size: 0.9 });
@@ -563,7 +566,7 @@ export class Weapons {
       g.addTrauma(0.45);
       g.slowmo(0.12, 0.25);
     } else {
-      g.areaDamage(p.pos.x, p.pos.z, cfg.radius, this.finalDmg(cfg.dmg, crit), { crit, knock: 16, fromX: p.pos.x, fromZ: p.pos.z });
+      g.areaDamage(p.pos.x, p.pos.z, cfg.radius, this.finalDmg(cfg.dmg, crit), { crit, knock: 16, fromX: p.pos.x, fromZ: p.pos.z, damageKind: 'nova' });
       g.shockwaves.fire(p.pos.x, p.pos.z, cfg.radius, PALETTE.nova, 0.5);
       g.shockwaves.fire(p.pos.x, p.pos.z, cfg.radius * 0.6, 0xffffff, 0.35);
       g.particles.burst(p.pos.x, 0.6, p.pos.z, 26, PALETTE.nova, { speed: 12, life: 0.5, size: 0.7, spread: 1 });

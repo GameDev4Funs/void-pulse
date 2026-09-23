@@ -1,6 +1,6 @@
 // ============ 网络层：WebSocket 房间客户端 ============
 const WORDS = ['NEBULA', 'PULSAR', 'QUASAR', 'NOVA', 'ORION', 'VEGA', 'LYRA', 'CYGNUS', 'DRACO', 'PHOENIX', 'ANDROMEDA', 'COSMOS', 'AURORA', 'ZENITH', 'ECLIPSE', 'STELLAR'];
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export function genRoomCode() {
   const w = WORDS[Math.floor(Math.random() * WORDS.length)];

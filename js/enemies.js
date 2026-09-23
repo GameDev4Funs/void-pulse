@@ -81,7 +81,7 @@ export class Enemies {
       const m = new THREE.Mesh(ebGeo, ebMat);
       m.visible = false;
       scene.add(m);
-      this.ebullets.push({ mesh: m, active: false, pos: new THREE.Vector3(), vel: new THREE.Vector3(), dmg: 0, life: 0 });
+      this.ebullets.push({ mesh: m, active: false, pos: new THREE.Vector3(), vel: new THREE.Vector3(), dmg: 0, life: 0, prevX: 0, prevZ: 0, wallHitFraction: Infinity, retireAfterCollision: false });
     }
 
     // —— 生成预警圈池 ——
@@ -104,6 +104,7 @@ export class Enemies {
       new THREE.MeshBasicMaterial({ color: 0xff2266, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })
     );
     this.chargeLine.visible = false;
+    this.chargeTelegraphLeft = 0;
     scene.add(this.chargeLine);
 
     // —— 蛛网减速区池 ——
@@ -111,9 +112,21 @@ export class Enemies {
     const webGeo = new THREE.CircleGeometry(1, 26);
     for (let i = 0; i < WEB_POOL; i++) {
       const m = new THREE.Mesh(webGeo, new THREE.MeshBasicMaterial({
-        color: PALETTE.webZone, transparent: true, opacity: 0.2,
-        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+        color: PALETTE.webZone, transparent: true, opacity: 0.16,
+        blending: THREE.NormalBlending, depthWrite: false, side: THREE.DoubleSide,
       }));
+      // 危险区用双轮廓 + 锯齿边缘，不能与绿色经验拾取物混淆。
+      const dangerMat = new THREE.MeshBasicMaterial({ color: PALETTE.webZone, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide });
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.72, 0.75, 32), dangerMat);
+      ring.position.z = 0.015;
+      m.add(ring);
+      const points = [];
+      for (let j = 0; j < 48; j++) {
+        const a = j / 48 * Math.PI * 2, r = j % 2 ? 0.91 : 1;
+        points.push(new THREE.Vector3(Math.cos(a) * r, Math.sin(a) * r, 0.018));
+      }
+      const border = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: PALETTE.webZone, transparent: true, opacity: 0.95 }));
+      m.add(border);
       m.rotation.x = -Math.PI / 2;
       m.visible = false;
       scene.add(m);
@@ -130,6 +143,7 @@ export class Enemies {
     for (const t of this.telegraphs) { t.active = false; t.mesh.visible = false; }
     for (const w of this.webZones) { w.active = false; w.mesh.visible = false; }
     this.chargeLine.visible = false;
+    this.chargeTelegraphLeft = 0;
     this.spawnT = DIRECTOR.firstSpawnDelay;
     this.spawnBudget = 0;
     this.nextSpawnType = null;
@@ -156,7 +170,9 @@ export class Enemies {
     w.active = true; w.x = x; w.z = z; w.t = 0;
     w.r = this.game.planet.shot === 'spore' ? 3.1 : 2.6;
     w.dur = this.game.planet.shot === 'spore' ? 7 : 6;
-    w.mesh.material.color.setHex(this.game.planet.shot === 'spore' ? 0xb2ef56 : PALETTE.webZone);
+    const dangerColor = this.game.planet.shot === 'spore' ? 0xffad3d : PALETTE.webZone;
+    w.mesh.material.color.setHex(dangerColor);
+    for (const marker of w.mesh.children) marker.material.color.setHex(dangerColor);
     w.mesh.position.set(x, 0.1, z);
     w.mesh.visible = true;
     if (this.game.mpIsHost()) this.game.mp.evWeb(x, z);
@@ -419,7 +435,8 @@ export class Enemies {
     e.elite = elite;
     e.hp = e.maxHp = base.hp;
     e.netHpFrac = 1;
-    e.flashT = 0; e.popT = 0.22; e.fuseT = -1; e.punchT = 0; e.burnT = 0;
+    e.flashT = 0; e.popT = 0.22; e.fuseT = -1; e.punchT = 0;
+    e.burnT = 0; e.burnDps = 0; e.burnAcc = 0; e.burnSourceId = null; e.lastBladeHit = -Infinity;
     e.mesh.visible = true;
     e.mesh.scale.setScalar(0.15);
     e.mat.emissive.setHex(elite ? 0xffffff : PALETTE[type]);
@@ -457,7 +474,7 @@ export class Enemies {
     e.webT = rand(1.5, 3);
     e.fuseDone = false;
     e.spiralT = 0;
-    e.burnT = 0; e.burnDps = 0; e.burnAcc = 0;
+    e.burnT = 0; e.burnDps = 0; e.burnAcc = 0; e.burnSourceId = null; e.lastBladeHit = -Infinity;
     e.mode = 'chase'; e.modeT = 0; e.attackT = 2.2;
     e.mesh.visible = true;
     e.mesh.scale.setScalar(0.15);
@@ -481,26 +498,46 @@ export class Enemies {
 
   bossMark() { return Math.max(0, Math.round((this.game.time - DIRECTOR.firstBossAt) / DIRECTOR.bossEvery)); }
 
+  // 主客机公用：保留完整轨迹供 Game 按墙面与玩家的先后顺序结算。
+  updateProjectiles(dt) {
+    const g = this.game;
+    for (const b of this.ebullets) {
+      if (!b.active) continue;
+      if (b.retireAfterCollision) { b.active = false; b.mesh.visible = false; continue; }
+      b.prevX = b.pos.x; b.prevZ = b.pos.z;
+      const step = Math.min(dt, Math.max(0, b.life));
+      b.life -= dt;
+      b.pos.addScaledVector(b.vel, step);
+      b.wallHitFraction = g.world.projectileHitFraction(b.prevX, b.prevZ, b.pos.x, b.pos.z, 0.22);
+      b.retireAfterCollision = b.wallHitFraction <= 1 || b.life <= 0
+        || Math.abs(b.pos.x) > g.arena + 2 || Math.abs(b.pos.z) > g.arena + 2;
+      const t = Math.min(1, b.wallHitFraction);
+      b.mesh.position.set(b.prevX + (b.pos.x - b.prevX) * t, b.pos.y, b.prevZ + (b.pos.z - b.prevZ) * t);
+      b.mesh.scale.setScalar(1 + Math.sin(g.time * 14 + b.pos.x) * 0.18);
+    }
+  }
+
+  setChargeTelegraph(x, z, dx, dz, left = 0.75) {
+    this.chargeTelegraphLeft = left;
+    this.chargeLine.visible = left > 0;
+    this.chargeLine.material.opacity = 0.65;
+    this.chargeLine.position.set(x + dx * 10.54, 0.3, z + dz * 10.54);
+    this.chargeLine.scale.set(1, 1, 21.08);
+    this.chargeLine.lookAt(x + dx * 21.08, 0.3, z + dz * 21.08);
+  }
+
+  tickChargeTelegraph(dt) {
+    this.chargeTelegraphLeft = Math.max(0, this.chargeTelegraphLeft - dt);
+    this.chargeLine.visible = this.chargeTelegraphLeft > 0;
+    this.chargeLine.material.opacity = 0.45 + 0.3 * (1 - this.chargeTelegraphLeft / 0.75);
+  }
+
   // ============ 每帧更新 ============
   update(dt) {
     const g = this.game, p = g.player;
     this.director(dt);
 
-    // 敌弹
-    for (const b of this.ebullets) {
-      if (!b.active) continue;
-      b.life -= dt;
-      b.pos.addScaledVector(b.vel, dt);
-      if (b.life <= 0
-        || Math.abs(b.pos.x) > this.game.arena + 2
-        || Math.abs(b.pos.z) > this.game.arena + 2
-        || this.game.world.blocksProjectile(b.pos.x, b.pos.z, 0.22)) {
-        b.active = false; b.mesh.visible = false;
-        continue;
-      }
-      b.mesh.position.copy(b.pos);
-      b.mesh.scale.setScalar(1 + Math.sin(g.time * 14 + b.pos.x) * 0.18);
-    }
+    this.updateProjectiles(dt);
 
     for (const e of this.list) {
       if (!e.active) continue;
@@ -520,17 +557,21 @@ export class Enemies {
       }
       if (e.punchT > 0) e.punchT -= dt;
 
-      // 点燃（焚天）DoT
+      // DoT 只累计仍然点燃的时间，末帧结清小数伤害并清掉过期强度。
       if (e.burnT > 0) {
-        e.burnT -= dt;
-        e.burnAcc += e.burnDps * dt;
-        if (e.burnAcc >= 1) {
-          const tick = Math.floor(e.burnAcc);
-          e.burnAcc -= tick;
+        const activeDt = Math.min(dt, e.burnT);
+        e.burnT = Math.max(0, e.burnT - dt);
+        e.burnAcc += e.burnDps * activeDt;
+        const tick = e.burnT === 0 ? e.burnAcc : Math.floor(e.burnAcc);
+        if (tick > 0) {
+          e.burnAcc = Math.max(0, e.burnAcc - tick);
+          g.recordDamage?.(e.burnSourceId, 'burn', Math.min(e.hp, tick));
           e.hp -= tick;
-          if (e.hp <= 0) { g.killEnemy(e); continue; }
         }
-        if (Math.random() < dt * 10) {
+        const sourceId = e.burnSourceId;
+        if (e.burnT === 0) { e.burnDps = 0; e.burnAcc = 0; e.burnSourceId = null; }
+        if (e.hp <= 0) { g.killEnemy(e, { damageKind: 'burn', sourceId }); continue; }
+        if (e.burnT > 0 && Math.random() < activeDt * 7) {
           g.particles.spawn(e.pos.x + rand(-0.4, 0.4), 1, e.pos.z + rand(-0.4, 0.4), 0, 1.5, 0, 0.35, 0.7, 0xff7a3e, 2, 0);
         }
       }
@@ -728,7 +769,7 @@ export class Enemies {
     if (hurtsPlayer) {
       const rr = base.blastR + g.player.radius;
       if (dist2(e.pos.x, e.pos.z, g.player.pos.x, g.player.pos.z) < rr * rr) {
-        const dealt = g.player.takeDamage(base.blastDmg, g);
+        const dealt = g.player.takeDamage(base.blastDmg, g, '自爆蜂');
         if (dealt === 'shield') g.onShieldBreak();
         else if (dealt !== false) g.onPlayerHurt(dealt, e.pos.x, e.pos.z);
       }
@@ -766,6 +807,15 @@ export class Enemies {
     const t0 = g.playerTarget(e.pos.x, e.pos.z);
     const dx = t0.x - e.pos.x, dz = t0.z - e.pos.z;
     const d = Math.hypot(dx, dz) || 1;
+
+    if (e.mode === 'windup') {
+      e.vel.set(0, 0, 0);
+      e.modeT = Math.max(0, e.modeT - dt);
+      this.tickChargeTelegraph(dt);
+      // 本帧仍然静止，确保至少完整 0.75 秒预警后才开始移动。
+      if (e.modeT <= 1e-8) { e.mode = 'charge'; e.modeT = 0.62; this.chargeLine.visible = false; }
+      return;
+    }
 
     if (e.mode === 'charge') {
       e.modeT -= dt;
@@ -830,16 +880,12 @@ export class Enemies {
       g.audio.missile();
       e.flashT = 0.09;
     } else if (atk === 'charge') {
-      e.mode = 'charge';
-      e.modeT = 0.62;
+      e.mode = 'windup';
+      e.modeT = 0.75;
+      e.vel.set(0, 0, 0);
       e.chargeDir.set(dx / d, 0, dz / d);
-      // 预警线
-      this.chargeLine.visible = true;
-      this.chargeLine.material.opacity = 0.55;
-      this.chargeLine.position.set(e.pos.x + e.chargeDir.x * 10, 0.3, e.pos.z + e.chargeDir.z * 10);
-      this.chargeLine.scale.set(1, 1, 20);
-      this.chargeLine.lookAt(e.pos.x + e.chargeDir.x * 20, 0.3, e.pos.z + e.chargeDir.z * 20);
-      setTimeout(() => { this.chargeLine.visible = false; }, 350);
+      this.setChargeTelegraph(e.pos.x, e.pos.z, e.chargeDir.x, e.chargeDir.z, e.modeT);
+      if (g.mpIsHost()) g.mp.send({ k: 'bossWindup', x: e.pos.x, z: e.pos.z, dx: e.chargeDir.x, dz: e.chargeDir.z, left: e.modeT });
       g.audio.bossWarn();
     } else if (atk === 'summon') {
       const n = 3 + phase;
@@ -865,6 +911,7 @@ export class Enemies {
     b.dmg = dmg;
     b.mesh.material.color.setHex(this.game.planet.id === 'station' ? PALETTE.enemyBullet : this.game.planet.accent);
     b.life = 6;
+    b.prevX = x; b.prevZ = z; b.wallHitFraction = Infinity; b.retireAfterCollision = false;
     b.mesh.visible = true;
     b.mesh.position.copy(b.pos);
     if (this.game.mpIsHost()) this.game.mp.evEBullet(x, z, dx, dz, speed, dmg);
@@ -919,6 +966,7 @@ export class Enemies {
     }
     if (e.type === 'boss') {
       this.bossActive = null;
+      this.chargeTelegraphLeft = 0; this.chargeLine.visible = false;
       g.ui.setBossHp(-1);
       g.onBossDown(e);
     }

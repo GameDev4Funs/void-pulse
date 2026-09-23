@@ -9,6 +9,21 @@ export const lerp = (a, b, t) => a + (b - a) * t;
 export const damp = (a, b, lambda, dt) => lerp(a, b, 1 - Math.exp(-lambda * dt));
 export const dist2 = (ax, az, bx, bz) => { const dx = ax - bx, dz = az - bz; return dx * dx + dz * dz; };
 
+// 首次相交的轨迹比例；起点已重叠返回 0，无相交返回 Infinity。
+export function segmentCircleHitFraction(x0, z0, x1, z1, cx, cz, radius) {
+  const ox = x0 - cx, oz = z0 - cz;
+  const c = ox * ox + oz * oz - radius * radius;
+  if (c <= 0) return 0;
+  const dx = x1 - x0, dz = z1 - z0;
+  const a = dx * dx + dz * dz;
+  if (a <= 1e-12) return Infinity;
+  const b = ox * dx + oz * dz;
+  const disc = b * b - a * c;
+  if (disc < 0) return Infinity;
+  const t = (-b - Math.sqrt(disc)) / a;
+  return t >= 0 && t <= 1 ? t : Infinity;
+}
+
 export function formatTime(t) {
   const m = Math.floor(t / 60), s = Math.floor(t % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;

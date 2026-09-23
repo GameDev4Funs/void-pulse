@@ -73,7 +73,7 @@ export class Pickups {
     for (const s of this.supplies) { s.active = false; s.mesh.visible = false; }
   }
 
-  dropGems(x, z, totalValue) {
+  dropGems(x, z, totalValue, { scatter = true } = {}) {
     // 大额经验拆成多颗
     let v = totalValue;
     while (v > 0) {
@@ -84,9 +84,9 @@ export class Pickups {
       g.active = true;
       g.value = chunk;
       g.magnet = false;
-      const a = rand(Math.PI * 2), r = rand(0.3, 1.4);
+      const a = rand(Math.PI * 2), r = scatter ? rand(0.3, 1.4) : 0;
       g.pos.set(clamp(x + Math.cos(a) * r, -this.game.arena + 0.5, this.game.arena - 0.5), 0.6, clamp(z + Math.sin(a) * r, -this.game.arena + 0.5, this.game.arena - 0.5));
-      g.vel.set(Math.cos(a) * rand(2, 5), 0, Math.sin(a) * rand(2, 5));
+      g.vel.set(scatter ? Math.cos(a) * rand(2, 5) : 0, 0, scatter ? Math.sin(a) * rand(2, 5) : 0);
       g.mesh.visible = true;
       g.mesh.scale.setScalar(chunk >= 5 ? 1.7 : 1);
       if (this.game.mpIsHost()) this.game.mp.evGemDrop(g, this.gems.indexOf(g));

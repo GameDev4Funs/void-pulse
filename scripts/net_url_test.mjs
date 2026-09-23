@@ -1,7 +1,7 @@
 import { defaultWsUrl, Net, PROTOCOL_VERSION } from '../js/net.js';
 
-if (PROTOCOL_VERSION !== 5) {
-  throw new Error('星球规则同步必须使用联机协议 v5');
+if (PROTOCOL_VERSION !== 6) {
+  throw new Error('战斗来源与暂离恢复同步必须使用联机协议 v6');
 }
 
 globalThis.location = {

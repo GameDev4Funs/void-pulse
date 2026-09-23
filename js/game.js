@@ -6,7 +6,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 import { ARENA, PALETTE, XP_CURVE, PULSE, SCORE, PLAYER, CHAIN, SUPPLY, ROUTES, ROUTE_TIERS, ULT } from './config.js';
-import { clamp, damp, rand, dist2, SpatialHash, shakeNoise } from './utils.js';
+import { clamp, damp, rand, dist2, SpatialHash, shakeNoise, segmentCircleHitFraction } from './utils.js';
 import { AudioEngine } from './audio.js';
 import { Input } from './input.js';
 import { buildWorld } from './world.js';
@@ -23,6 +23,9 @@ import { Reactor, REACTOR } from './reactor.js';
 import { loadSettings, saveSettings } from './settings.js';
 import { getPlanet, isPlanetId, applyPlanetStats } from './planets.js';
 
+import { bestRecord, recordKey, saveRecord } from './records.js';
+import { MISSION, missionComplete, DAMAGE_NAMES, ENEMY_NAMES } from './mission.js';
+
 const CAM_OFFSET = new THREE.Vector3(0, 28.5, 15.5);
 const MP_ARENA = 80;
 const RESPAWN_TIME = 10;
@@ -30,7 +33,8 @@ const RESPAWN_TIME = 10;
 export class Game {
   constructor(container) {
     const params = new URLSearchParams(location.search);
-    const lowfx = params.has('lowfx');
+    this.settings = loadSettings();
+    const lowfx = params.has('lowfx') || this.settings.quality === 'low';
     this.bench = params.has('bench');   // 测试模式：跳过渲染只跑逻辑
     // —— 渲染器 ——
     this.renderer = new THREE.WebGLRenderer({ antialias: !lowfx, powerPreference: 'high-performance' });
@@ -48,13 +52,13 @@ export class Game {
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     if (!lowfx) {
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.5, 0.35);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.5, 0.45);
       this.composer.addPass(this.bloom);
     }
     this.composer.addPass(new OutputPass());
+    this.setQuality(lowfx ? 'low' : 'high');
 
     // —— 系统 ——
-    this.settings = loadSettings();
     this.reactor = new Reactor();
     this.audio = new AudioEngine(this.settings);
     this.input = new Input(this.renderer.domElement);
@@ -99,7 +103,10 @@ export class Game {
     this.dyingT = 0;
     this.pendingCards = null;
     this.cardOpen = false;      // 联机非阻塞选卡
-    this.best = parseInt(localStorage.getItem('vp_best_score') || '0', 10);
+    this.best = bestRecord(recordKey(this.planet.id));
+    this.damageBySource = {};
+    this.runOutcome = null; this.endless = false;
+    this.lastDamageCause = '信号丢失';
     this.ambientT = 0;
     // 联机
     this.mp = null;
@@ -144,7 +151,10 @@ export class Game {
       if (this.mpIsHost()) {
         if (document.hidden) this.mp.send({ k: 'hostaway' });
         else this.mp.send({ k: 'hostback' });
-      }
+      } else if (this.mp && this.state === 'playing') this.mp.setLocalAway(document.hidden);
+      // Never catch up time spent in another tab after visibility is restored.
+      this.clock.getDelta();
+      this._skipElapsed = true;
     });
 
     // 调试钩子（无头测试用）
@@ -158,6 +168,76 @@ export class Game {
     };
 
     this.renderer.setAnimationLoop(() => this.frame());
+  }
+
+  setQuality(quality) {
+    const low = quality === 'low';
+    this.settings.quality = low ? 'low' : 'high';
+    if (!low && !this.bloom) {
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.5, 0.45);
+      this.composer.insertPass(this.bloom, 1);
+    }
+    if (this.bloom) this.bloom.enabled = !low;
+    this.renderer.setPixelRatio(low ? 1 : Math.min(devicePixelRatio, 1.75));
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(innerWidth, innerHeight);
+  }
+
+  refreshRecord() {
+    const count = this.mp ? (this.state === 'lobby' ? this.mp.playerCount : (this.runPlayerCount || this.mp.participantCount)) : 1;
+    this.recordId = recordKey(this.planet.id, count || 1, !!this.mp, this.endless);
+    this.best = bestRecord(this.recordId);
+  }
+
+  runSummary() {
+    const build = UPGRADES.filter((u) => this.upgrades.level(u.id) > 0)
+      .map((u) => `${u.name} ${this.upgrades.level(u.id)}${this.weapons.evolved[u.id] ? '★' : ''}`).join(' · ');
+    const totals = this.damageBySource[this.net?.id ?? 'solo'] || {};
+    return {
+      cause: this.runOutcome === 'victory' ? '能源网络修复完成，战机撤离条件已达成' : this.lastDamageCause,
+      build, planet: this.planet.name,
+      mode: `${this.mp ? `${this.runPlayerCount}人合作` : '单人'}${this.endless ? '无尽' : '任务'}`,
+      damage: Object.entries(totals).map(([kind, value]) => ({ name: DAMAGE_NAMES[kind] || DAMAGE_NAMES.direct, value: Math.round(value) })).sort((a, b) => b.value - a.value),
+    };
+  }
+
+  saveRunRecord() {
+    const { isBest, best } = saveRecord(this.recordId, {
+      score: this.score, time: this.time, planet: this.planet.id, players: this.runPlayerCount || 1,
+      outcome: this.runOutcome, build: this.runSummary().build,
+    });
+    this.best = best;
+    return isBest;
+  }
+
+  completeMission(data) {
+    if (this.endless || this.runOutcome === 'victory' || this.state !== 'playing') return;
+    const d = data || { k: 'mission', sc: Math.floor(this.score), tm: this.time, kl: this.player.kills,
+      lv: this.player.level, sec: this.sector, damage: this.damageBySource, reactor: this.reactor.snapshot() };
+    this.score = d.sc; this.time = d.tm;
+    if (d.damage) this.damageBySource = d.damage;
+    if (d.reactor) Object.assign(this.reactor, d.reactor);
+    this.runOutcome = 'victory'; this.state = 'gameover';
+    this.ui.closeSettings(); this.ui.closeBuild?.(); this.ui.closeMenu?.();
+    this.ui.hideLevelUp(); this.cardOpen = false;
+    const isBest = this.saveRunRecord();
+    if (this.mpIsHost() && !data) this.mp.send(d);
+    if (this.mp) this.ui.showMpGameOver({ score: d.sc, time: d.tm, kills: d.kl, level: d.lv, sector: d.sec, isBest }, this.mpIsHost());
+    else this.ui.showGameOver({ score: d.sc, time: d.tm, kills: d.kl, level: d.lv, sector: d.sec }, isBest);
+    this.audio.reactorCapture();
+  }
+
+  continueEndless(fromHost = false) {
+    if (this.state !== 'gameover' || this.runOutcome !== 'victory' || (this.mp && !this.mp.isHost && !fromHost)) return;
+    if (this.mpIsHost()) this.mp.send({ k: 'endless' });
+    this.endless = true; this.runOutcome = null; this.state = 'playing';
+    this.mp?.resumeRunPresence();
+    this.refreshRecord();
+    this.timeScale = 1; this.slowT = 0;
+    this.clock.getDelta(); this.input.clear();
+    this.ui.showHud();
+    if (this.mp && this.player.dead) this.ui.respawnOverlay(true);
+    this.ui.toast('无尽挑战开启 · 保留构筑，继续创造纪录', '#ffd23e');
   }
 
   // ============ 联机：模式/大厅 ============
@@ -180,6 +260,7 @@ export class Game {
       this.setArena(this.arena, true);
     }
     if (!fromHost) localStorage.setItem('vp_planet', id);
+    this.refreshRecord();
     this.ui.refreshPlanets();
     if (this.mpIsHost() && !fromHost) this.mp.send({ k: 'planet', id });
     return true;
@@ -201,7 +282,7 @@ export class Game {
     let bd = (p.alive && !p.dead) ? dist2(x, z, bx, bz) : Infinity;
     if (this.mp) {
       for (const q of this.mp.peers.values()) {
-        if (!q.ready || q.dead) continue;
+        if (!this.mp.peerAvailable(q)) continue;
         const d = dist2(x, z, q.x, q.z);
         if (d < bd) { bd = d; bx = q.x; bz = q.z; bvx = q.vx || 0; bvz = q.vz || 0; }
       }
@@ -215,7 +296,7 @@ export class Game {
     if (p.alive && !p.dead) list.push({ x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z });
     if (this.mp) {
       for (const q of this.mp.peers.values()) {
-        if (q.ready && !q.dead) list.push({ x: q.x, z: q.z, vx: q.vx || 0, vz: q.vz || 0 });
+        if (this.mp.peerAvailable(q)) list.push({ x: q.x, z: q.z, vx: q.vx || 0, vz: q.vz || 0 });
       }
     }
     return list;
@@ -333,14 +414,27 @@ export class Game {
     if (this.state === 'gameover') return;
     this.state = 'gameover';
     this.score = d.sc;
+    this.time = d.tm;
+    this.runOutcome = 'defeat';
+    if (d.damage) this.damageBySource = d.damage;
+    if (d.reactor) Object.assign(this.reactor, d.reactor);
+    const isBest = this.saveRunRecord();
+    this.ui.hideLevelUp(); this.cardOpen = false;
     this.ui.showMpGameOver({
       score: d.sc, time: d.tm, kills: d.kl, level: d.lv, sector: d.sec,
-      isBest: d.isBest,
+      isBest,
     }, this.mpIsHost());
   }
 
   // 团灭后回到大厅
-  quitToLobby() {
+  quitToLobby(fromHost = false) {
+    if (!this.mp || !this.net?.connected) {
+      this.quitToTitle(); this.ui.toast('连接已断开，请重新创建或加入房间', '#ff6b81'); return;
+    }
+    if (!this.mp.isHost && this.runOutcome === 'victory' && !fromHost) {
+      this.ui.toast('等待房主选择继续无尽或全队返回大厅', '#ffd23e'); return;
+    }
+    if (this.mpIsHost()) this.mp.send({ k: 'lobby' });
     this.resetRun();
     this.state = 'lobby';
     if (this.mpIsHost()) void this.net.lockRoom(false);
@@ -351,12 +445,10 @@ export class Game {
     if (!this.mpIsHost()) return;
     const p = this.player;
     if (p.alive && !p.dead) return;
-    for (const q of this.mp.peers.values()) if (q.participant && !q.dead) return;
+    for (const q of this.mp.peers.values()) if (q.participant && (this.mp.peerAvailable(q) || this.mp.peerPending(q))) return;
     // 团灭
     const score = Math.floor(this.score);
-    const isBest = score > this.best;
-    if (isBest) { this.best = score; localStorage.setItem('vp_best_score', String(score)); }
-    const d = { k: 'gov', sc: score, tm: this.time, kl: p.kills, lv: p.level, sec: this.sector, isBest };
+    const d = { k: 'gov', sc: score, tm: this.time, kl: p.kills, lv: p.level, sec: this.sector, damage: this.damageBySource, reactor: this.reactor.snapshot() };
     this.mp.send(d);
     this.mpGameOver(d);
   }
@@ -375,15 +467,22 @@ export class Game {
   }
 
   resetRun() {
+    this.input.clear(); this.pendingCards = null;
+    this.runPlayerCount = this.mp ? this.mp.participantCount : 1;
     this.time = 0; this.score = 0; this.pulse = 0; this.sector = 1;
     this.trauma = 0; this.slowT = 0; this.timeScale = 1;
     this.pendingLevels = 0; this.dyingT = 0;
     this.cardOpen = false;
     this.rerolls = 2;
+    this.runOutcome = null; this.endless = false; this.damageBySource = {};
+    this.lastDamageCause = '信号丢失'; this._damageContext = null;
+    this.tutorialXpSpawned = false; this.rescueActive = false;
+    this.refreshRecord();
     this.reactor.reset();
     this.reactorRewardCycle = -1;
     this.reactorNoticeCycle = -1;
     this.ui?.closeSettings();
+    this.ui?.closeBuild?.(); this.ui?.closeMenu?.();
     if (this.mp) this.mp.resetRunState();
     this.chain = 0; this.chainT = 0;
     this.chainWindow = CHAIN.window; this.chainScoreMul = 1;
@@ -425,6 +524,7 @@ export class Game {
     this.setArena(ARENA, changed);
     this.state = 'title';
     this.ui.hideLobby();
+    this.refreshRecord();
     this.ui.showTitle(this.best);
   }
 
@@ -440,6 +540,7 @@ export class Game {
   }
 
   gameOver() {
+    this.runOutcome = 'defeat';
     this.state = 'dying';
     this.dyingT = 1.5;
     this.player.alive = false;
@@ -456,11 +557,7 @@ export class Game {
   finalizeGameOver() {
     this.state = 'gameover';
     const score = Math.floor(this.score);
-    const isBest = score > this.best;
-    if (isBest) {
-      this.best = score;
-      localStorage.setItem('vp_best_score', String(score));
-    }
+    const isBest = this.saveRunRecord();
     this.ui.showGameOver({
       score, time: this.time, kills: this.player.kills,
       level: this.player.level, sector: this.sector,
@@ -547,21 +644,10 @@ export class Game {
     this.ult = 0;
     this.ultUses++;
     const p = this.player;
-    this.enemies.clearEBullets();
     if (this.mp && !this.mp.isHost) {
+      this.enemies.clearEBullets();
       this.mp.sendUltDmg(p.pos.x, p.pos.z);
-    } else {
-      for (const e of this.enemies.list) {
-        if (!e.active || e.dying) continue;
-        if (e.type === 'boss') {
-          this.damageEnemy(e, Math.round(e.maxHp * ULT.bossFrac), { crit: true });
-        } else {
-          const kx = e.pos.x - p.pos.x, kz = e.pos.z - p.pos.z;
-          this.damageEnemy(e, ULT.dmg, { crit: true, knock: 8, kx, kz });
-        }
-      }
-      if (this.mpIsHost()) this.mp.send({ k: 'ceb' });
-    }
+    } else this.resolveUltDamage({ sourceId: this.net?.id ?? 'solo', x: p.pos.x, z: p.pos.z });
     //  cinematic：光束柱 + 全屏冲击 + 慢动作
     this.ultBeamT = 0.9;
     this.ultBeam.visible = true;
@@ -675,30 +761,37 @@ export class Game {
   // ============ 战斗结算 ============
   addScore(n) { this.score += n; }
 
-  damageEnemy(e, dmg, { crit = false, knock = 0, kx = 0, kz = 0 } = {}) {
-    if (!e.active || e.dying) return;
-    // 客机：本地即时表现 + 伤害上报主机
+  recordDamage(sourceId, damageKind, amount) {
+    if (!(amount > 0)) return;
+    const id = sourceId ?? this.net?.id ?? 'solo';
+    const totals = this.damageBySource[id] || (this.damageBySource[id] = {});
+    totals[damageKind] = (totals[damageKind] || 0) + amount;
+  }
+
+  damageEnemy(e, dmg, options = {}) {
+    if (!e.active || e.dying || !Number.isFinite(dmg) || dmg <= 0) return;
+    const context = this._damageContext || {};
+    const { crit = false, knock = 0, kx = 0, kz = 0 } = options;
+    const sourceId = options.sourceId ?? context.sourceId ?? this.net?.id ?? 'solo';
+    const damageKind = options.damageKind ?? context.damageKind ?? 'direct';
+    const localSource = sourceId === (this.net?.id ?? 'solo');
+    const skill = context.skill || ['pulse', 'ult'].includes(damageKind);
+    const burnDps = skill ? 0 : Math.max(0, options.burnDps ?? (localSource && this.routeTiers.pyro >= 3 ? dmg * 0.2 : 0));
+    e.flashT = 0.09; e.punchT = 0.14;
     if (this.mp && !this.mp.isHost) {
-      e.flashT = 0.09;
-      e.punchT = 0.14;
-      // 焚天（燃烧 III）客机近似：直伤 +25%（点燃粒子本地表现）
-      let final = dmg;
-      if (this.routeTiers.pyro >= 3) {
-        final = Math.round(dmg * 1.25);
-        if (Math.random() < 0.4) this.particles.spawn(e.pos.x, 1, e.pos.z, 0, 1.5, 0, 0.35, 0.7, 0xff7a3e, 2, 0);
-      }
-      this.texts.fire(e.pos.x, 1.4, e.pos.z, String(final), crit ? 'crit' : '');
+      this.texts.fire(e.pos.x, 1.4, e.pos.z, String(dmg), crit ? 'crit' : '');
       this.audio.enemyHit();
-      this.mp.queueDmg(e, final, crit, knock, kx, kz);
+      this.mp.queueDmg(e, dmg, crit, knock, kx, kz, { burnDps, damageKind });
       return;
     }
+    this.recordDamage(sourceId, damageKind, Math.min(Math.max(0, e.hp), dmg));
     e.hp -= dmg;
-    e.flashT = 0.09;
-    e.punchT = 0.14;   // 受击挤压
-    // 焚天（燃烧 III）：附加点燃
-    if (this.routeTiers.pyro >= 3) {
+    if (burnDps > 0) {
+      if (e.burnT <= 0 || burnDps >= e.burnDps) {
+        e.burnDps = burnDps; e.burnSourceId = sourceId;
+        if (e.burnT <= 0) e.burnAcc = 0;
+      }
       e.burnT = 3;
-      e.burnDps = Math.max(e.burnDps || 0, dmg * 0.2);
     }
     if (knock !== 0 && e.knockRes < 1) {
       const kl = Math.hypot(kx, kz) || 1;
@@ -707,7 +800,25 @@ export class Game {
     }
     this.texts.fire(e.pos.x, 1.4, e.pos.z, String(dmg), crit ? 'crit' : '');
     this.audio.enemyHit();
-    if (e.hp <= 0) this.killEnemy(e);
+    if (e.hp <= 0) this.killEnemy(e, { sourceId, damageKind });
+  }
+
+  resolvePulseDamage(source) { this.resolveSkillDamage('pulse', source); }
+  resolveUltDamage(source) { this.resolveSkillDamage('ult', source); }
+  resolveSkillDamage(kind, source) {
+    this.enemies.clearEBullets();
+    if (this.mpIsHost()) this.mp.send({ k: 'ceb' });
+    const oldContext = this._damageContext;
+    this._damageContext = { ...source, damageKind: kind, skill: true, refundLeft: PULSE.skillRefundCap };
+    try {
+      for (const e of this.enemies.list) {
+        if (!e.active || e.dying) continue;
+        if (kind === 'pulse' && dist2(source.x, source.z, e.pos.x, e.pos.z) >= PULSE.radius ** 2) continue;
+        const dmg = kind === 'pulse' ? Math.round(PULSE.damage + e.maxHp * PULSE.maxHpBonus)
+          : e.type === 'boss' ? Math.round(e.maxHp * ULT.bossFrac) : ULT.dmg;
+        this.damageEnemy(e, dmg, { crit: true, knock: kind === 'pulse' ? 20 : 8, kx: e.pos.x - source.x, kz: e.pos.z - source.z });
+      }
+    } finally { this._damageContext = oldContext; }
   }
 
   // 死亡特效（主机击杀与客机回放共用）
@@ -769,7 +880,7 @@ export class Game {
     }
   }
 
-  killEnemy(e) {
+  killEnemy(e, options = {}) {
     if (e.dying) return;
     // 自爆蜂被击杀 → 殉爆（只伤敌人，连锁反应）
     if (e.type === 'bomber' && !e.fuseDone) { this.enemies.bomberBlast(e, false); return; }
@@ -782,12 +893,22 @@ export class Game {
     this.chainT = this.chainWindow;
     const mul = this.chainMul();
     this.score += Math.round(e.score * mul);
-    this.pulse = Math.min(PULSE.max, this.pulse + (e.type === 'boss' ? PULSE.perBossKill : PULSE.perKill));
+    let qp = e.type === 'boss' ? PULSE.perBossKill : PULSE.perKill;
+    const ctx = this._damageContext;
+    if (ctx?.skill && e.type !== 'boss') {
+      qp = Math.min(ctx.refundLeft, qp * PULSE.skillKillChargeMul);
+      ctx.refundLeft -= qp;
+    }
+    e.deathRewards = { qp, up: e.type === 'boss' ? ULT.bossBonus : 0, skill: !!ctx?.skill };
+    if (p.alive && !p.dead && p.stats.hp > 0) {
+      this.pulse = Math.min(PULSE.max, this.pulse + qp);
+      this.ult = Math.min(ULT.max, this.ult + e.deathRewards.up);
+    }
     // 连锁里程碑：冲击波（0.5s 内不重复触发，防大招刷屏）
-    if (this.chain % CHAIN.milestone === 0 && this.time - this.lastMilestoneT > 0.5) {
+    if (!ctx?.skill && p.alive && !p.dead && this.chain % CHAIN.milestone === 0 && this.time - this.lastMilestoneT > 0.5) {
       this.lastMilestoneT = this.time;
       this.shockwaves.fire(p.pos.x, p.pos.z, 6, 0xffd23e, 0.5);
-      this.areaDamage(p.pos.x, p.pos.z, 6, 25, { knock: 12, fromX: p.pos.x, fromZ: p.pos.z });
+      this.areaDamage(p.pos.x, p.pos.z, 6, 25, { damageKind: 'chain', knock: 12, fromX: p.pos.x, fromZ: p.pos.z });
       this.texts.fire(p.pos.x, 2, p.pos.z, `${this.chain} 连锁!`, 'crit');
       this.audio.chainZap();
     }
@@ -811,13 +932,13 @@ export class Game {
       }
     }
     // 爆燃（燃烧 II）：击杀引发二次爆炸
-    if (this.routeTiers.pyro >= 2 && e.type !== 'boss') {
-      this.areaDamage(e.pos.x, e.pos.z, 2.6, 20, { knock: 5, fromX: e.pos.x, fromZ: e.pos.z });
+    if (!ctx?.skill && p.alive && !p.dead && this.routeTiers.pyro >= 2 && e.type !== 'boss') {
+      this.areaDamage(e.pos.x, e.pos.z, 2.6, 20, { damageKind: 'route', knock: 5, fromX: e.pos.x, fromZ: e.pos.z });
       this.particles.burst(e.pos.x, 0.6, e.pos.z, 8, 0xff7a3e, { speed: 6, life: 0.4, size: 0.6 });
       this.shockwaves.fire(e.pos.x, e.pos.z, 2.6, 0xff7a3e, 0.35);
     }
     // 落雷（雷霆 II）：25% 概率天降神雷
-    if (this.routeTiers.volt >= 2 && Math.random() < 0.25) {
+    if (!ctx?.skill && p.alive && !p.dead && this.routeTiers.volt >= 2 && Math.random() < 0.25) {
       this.smiteAt(e.pos.x, e.pos.z, 50, 3);
     }
     this.enemies.onDeath(e);
@@ -827,19 +948,19 @@ export class Game {
   smiteAt(x, z, dmg, radius) {
     this.weapons.fireBolt(x, 10, z, x, 0.6, z);
     this.weapons.fireBolt(x + 0.5, 9, z - 0.4, x, 0.6, z);
-    this.areaDamage(x, z, radius, dmg, { knock: 6, fromX: x, fromZ: z });
+    this.areaDamage(x, z, radius, dmg, { damageKind: 'route', knock: 6, fromX: x, fromZ: z });
     this.shockwaves.fire(x, z, radius, 0xffd23e, 0.4);
     this.particles.burst(x, 0.8, z, 10, 0xffd23e, { speed: 7, life: 0.4, size: 0.6 });
     this.audio.tesla();
   }
 
-  areaDamage(x, z, r, dmg, { crit = false, knock = 0, fromX, fromZ } = {}) {
+  areaDamage(x, z, r, dmg, { crit = false, knock = 0, fromX, fromZ, ...options } = {}) {
     const fx = fromX ?? x, fz = fromZ ?? z;
     for (const e of this.enemies.list) {
       if (!e.active || e.dying) continue;
       const rr = r + e.radius;
       if (dist2(x, z, e.pos.x, e.pos.z) < rr * rr) {
-        this.damageEnemy(e, dmg, { crit, knock, kx: e.pos.x - fx, kz: e.pos.z - fz });
+        this.damageEnemy(e, dmg, { ...options, crit, knock, kx: e.pos.x - fx, kz: e.pos.z - fz });
       }
     }
   }
@@ -862,7 +983,6 @@ export class Game {
   onBossDown(e) {
     this.slowmo(0.8, 0.12);
     this.pickups.magnetAll();
-    this.ult = Math.min(ULT.max, this.ult + ULT.bossBonus);
     this.ui.flash(0.5, 200);
     this.texts.fire(e.pos.x, 2.5, e.pos.z, `+${e.score}`, 'crit');
   }
@@ -873,21 +993,9 @@ export class Game {
     const p = this.player;
     p.iFrames = Math.max(p.iFrames, PULSE.invuln);
     if (this.mp && !this.mp.isHost) {
-      // 客机：本地消弹 + 上报主机结算
       this.enemies.clearEBullets();
       this.mp.sendPulseDmg(p.pos.x, p.pos.z);
-    } else {
-      this.enemies.clearEBullets();
-      if (this.mpIsHost()) this.mp.send({ k: 'ceb' });
-      for (const e of this.enemies.list) {
-        if (!e.active || e.dying) continue;
-        const d = dist2(p.pos.x, p.pos.z, e.pos.x, e.pos.z);
-        if (d < PULSE.radius * PULSE.radius) {
-          const dmg = Math.round(PULSE.damage + e.maxHp * PULSE.maxHpBonus);
-          this.damageEnemy(e, dmg, { crit: true, knock: 20, kx: e.pos.x - p.pos.x, kz: e.pos.z - p.pos.z });
-        }
-      }
-    }
+    } else this.resolvePulseDamage({ sourceId: this.net?.id ?? 'solo', x: p.pos.x, z: p.pos.z });
     this.ui.flash(0.75, 240);
     this.shockwaves.fire(p.pos.x, p.pos.z, PULSE.radius, 0xd94eff, 0.8);
     this.shockwaves.fire(p.pos.x, p.pos.z, PULSE.radius * 0.55, 0xffffff, 0.5);
@@ -913,47 +1021,53 @@ export class Game {
   }
 
   frameInner() {
-    const rawDt = Math.min(this.clock.getDelta(), 0.05);
+    const elapsed = Math.max(0, this.clock.getDelta());
+    const budget = this._skipElapsed ? 0 : Math.min(elapsed, 0.25);
+    this._skipElapsed = false;
     this.handleGlobalKeys();
-    document.body.classList.toggle('in-combat', this.state === 'playing' && !this.ui.settingsOpen && !this.cardOpen && !this.input.isTouch);
-
-    // 时间缩放（顿帧 / 慢动作）
-    let target = (this.state === 'playing' || this.state === 'dying') ? 1 : 0;
-    if (this.mp && !this.mp.isHost && this.mp.hostAway) target = 0;
-    if (this.slowT > 0) { this.slowT -= rawDt; target = Math.min(target, this.slowScale); }
-    if (this.state === 'title' || this.state === 'lobby') target = 1;
-    this.timeScale = damp(this.timeScale, target, 14, rawDt);
-    if (this.timeScale < 0.002 && target === 0) this.timeScale = 0;
-    const dt = rawDt * this.timeScale;
-
-    switch (this.state) {
-      case 'title': this.updateTitle(rawDt); break;
-      case 'lobby': this.updateTitle(rawDt); break;
-      case 'playing': this.updatePlaying(dt, rawDt); break;
-      case 'dying':
-        this.updateWorldOnly(dt);
-        this.dyingT -= rawDt;
-        if (this.dyingT <= 0) this.finalizeGameOver();
-        break;
-      // levelup / paused / gameover: 冻结，仅渲染
+    const blocked = this.ui.blocksGameplayInput?.();
+    document.body.classList.toggle('in-combat', this.state === 'playing' && !blocked && !this.cardOpen && !this.input.isTouch);
+    document.body.classList.toggle('reduced-motion', this.settings.reducedMotion);
+    let remaining = budget, visualDt = 0;
+    // Up to 15 small steps per rendered frame: 10/20 FPS keeps real speed without tunnelling.
+    // Long OS suspension is bounded; visibility changes explicitly discard hidden time.
+    while (remaining > 1e-8) {
+      const rawDt = Math.min(1 / 60, remaining);
+      remaining -= rawDt;
+      let target = this.state === 'playing' || this.state === 'dying' ? 1 : 0;
+      if (this.mp && !this.mp.isHost && this.mp.hostAway) target = 0;
+      if (this.slowT > 0) { this.slowT -= rawDt; target = Math.min(target, this.slowScale); }
+      if (this.state === 'title' || this.state === 'lobby') target = 1;
+      this.timeScale = target === 0 ? 0 : damp(this.timeScale, target, 14, rawDt);
+      const dt = rawDt * this.timeScale;
+      visualDt += dt;
+      this.world.update(dt, this.time, this.reactor);
+      switch (this.state) {
+        case 'title': case 'lobby': this.updateTitle(rawDt); break;
+        case 'playing': this.updatePlaying(dt, rawDt); break;
+        case 'dying':
+          this.updateWorldOnly(dt);
+          this.dyingT -= rawDt;
+          if (this.dyingT <= 0) this.finalizeGameOver();
+          break;
+      }
+      this.input.endFrame(); // Edge-triggered actions happen once, held movement continues.
     }
-
-    // 相机 & 通用更新
-    this.updateCamera(rawDt);
-    this.particles.update(dt);
-    this.shockwaves.update(dt);
-    this.debris.update(dt);
-    this.texts.update(rawDt);
-    // 湮灭光束柱动画
+    this.updateCamera(Math.min(elapsed, 0.1));
+    this.particles.update(visualDt);
+    this.shockwaves.update(visualDt);
+    this.debris.update(visualDt);
+    this.texts.update(Math.min(elapsed, 0.25));
     if (this.ultBeamT > 0) {
-      this.ultBeamT -= rawDt;
+      this.ultBeamT -= visualDt;
       const f = Math.max(0, this.ultBeamT / 0.9);
       this.ultBeam.material.opacity = f * 0.55;
       this.ultBeam.scale.set(1 + (1 - f) * 2.2, 1, 1 + (1 - f) * 2.2);
-      this.ultBeam.rotation.y += rawDt * 6;
+      this.ultBeam.rotation.y += visualDt * 6;
       if (this.ultBeamT <= 0) this.ultBeam.visible = false;
     }
-    this.world.update(this.state === 'paused' || this.state === 'levelup' ? 0 : dt, this.time, this.reactor);
+    this.world.update(0, this.time, this.reactor);
+    if (this.state !== 'title' && this.state !== 'lobby') this.ui.update(elapsed);
     if (!this.bench) this.composer.render();
     this.input.endFrame();
   }
@@ -965,7 +1079,6 @@ export class Game {
 
     // 房主后台时客机完整冻结玩法逻辑，避免恢复后位置、冷却和伤害队列漂移。
     if (isGuest && this.mp.hostAway) {
-      this.ui.update(rawDt);
       return;
     }
 
@@ -995,11 +1108,18 @@ export class Game {
         this.sporeDamageT -= dt;
         if (this.sporeDamageT <= 0) {
           this.sporeDamageT = 0.8;
-          const dealt = p.takeDamage(5, this);
+          const dealt = p.takeDamage(5, this, '孢子毒区');
           if (dealt === 'shield') this.onShieldBreak();
           else if (dealt !== false) this.onPlayerHurt(dealt, p.pos.x, p.pos.z);
         }
       } else this.sporeDamageT = 0.5;
+    }
+
+    if (!isGuest && !this.tutorialXpSpawned && this.time >= 1) {
+      this.tutorialXpSpawned = true;
+      this.pickups.dropGems(0, 4.5, XP_CURVE(1), { scatter: false });
+      this.ui.toast('收集前方绿色碎片，完成第一次升级', '#4dff88');
+      if (this.mpIsHost()) this.mp.evToast('收集前方绿色碎片，全队共享升级', '#4dff88');
     }
 
     // 空投补给（主机/单机）
@@ -1016,7 +1136,7 @@ export class Game {
     }
 
     // 雷神（雷霆 III）：每 5s 轰击最密集敌群
-    if (this.routeTiers.volt >= 3) {
+    if (p.alive && !p.dead && p.stats.hp > 0 && this.routeTiers.volt >= 3) {
       this.voltSmiteT -= dt;
       if (this.voltSmiteT <= 0) {
         this.voltSmiteT = 5;
@@ -1028,7 +1148,7 @@ export class Game {
       }
     }
     // 吞噬（虚空 III）：每 8s 处决周围残血敌人并回血
-    if (this.routeTiers.void >= 3) {
+    if (p.alive && !p.dead && p.stats.hp > 0 && this.routeTiers.void >= 3) {
       this.voidDevourT -= dt;
       if (this.voidDevourT <= 0) {
         this.voidDevourT = 8;
@@ -1038,7 +1158,7 @@ export class Game {
           const frac = isGuest ? (e.netHpFrac ?? 1) : e.hp / e.maxHp;
           if (frac > 0.25) continue;
           if (dist2(e.pos.x, e.pos.z, p.pos.x, p.pos.z) > 81) continue;
-          this.damageEnemy(e, 9999, {});
+          this.damageEnemy(e, 9999, { damageKind: 'route' });
           eaten++;
         }
         if (eaten > 0) {
@@ -1055,7 +1175,8 @@ export class Game {
 
     // 联机倒地/重生
     if (this.mp && p.dead) {
-      p.respawnT -= dt;
+      this.rescueActive = [...this.mp.peers.values()].some((q) => this.mp.peerAvailable(q) && dist2(p.pos.x, p.pos.z, q.x, q.z) <= 16);
+      p.respawnT -= dt * (this.rescueActive ? 2 : 1);
       this.ui.respawnCountdown(p.respawnT);
       if (p.respawnT <= 0) {
         p.respawn();
@@ -1083,16 +1204,14 @@ export class Game {
     this.checkPlayerCollisions();
     this.updateReactor(dt, isGuest);
 
-    // 超载
-    if ((this.input.justPressed('KeyQ') || this.input.justPressed('MouseRight'))) this.activatePulse();
-    // 湮灭协议
-    if (this.input.justPressed('KeyE')) this.activateUlt();
+    if (!this.ui.blocksGameplayInput?.()) {
+      if (this.input.justPressed('KeyQ') || this.input.justPressed('MouseRight')) this.activatePulse();
+      if (this.input.justPressed('KeyE')) this.activateUlt();
+    }
 
     // 升级（联机为非阻塞选卡）
     if (this.pendingLevels > 0 && this.player.alive && !this.player.dead && !this.cardOpen) this.enterLevelUp();
 
-    // HUD
-    this.ui.update(rawDt);
 
     // 死亡判定
     if (this.player.stats.hp <= 0 && this.player.alive && !this.player.dead) {
@@ -1106,6 +1225,7 @@ export class Game {
       this.mp.hostTickPeers(dt);
       this.hostCheckWipe();
     }
+    if (!isGuest && this.state === 'playing' && missionComplete(this.time, this.reactor.captures, this.endless)) this.completeMission();
   }
 
   updateArenaHazard(dt, inside) {
@@ -1123,7 +1243,7 @@ export class Game {
     if (this.arenaHazardDamageT > 0) return;
     this.arenaHazardDamageT = 0.72;
     const p = this.player;
-    const dealt = p.takeDamage(this.planet.hazard.damage, this);
+    const dealt = p.takeDamage(this.planet.hazard.damage, this, this.planet.hazard.name);
     if (dealt === 'shield') this.onShieldBreak();
     else if (dealt !== false) {
       this.onPlayerHurt(dealt, p.pos.x, p.pos.z);
@@ -1202,30 +1322,33 @@ export class Game {
 
   checkPlayerCollisions() {
     const p = this.player;
-    if (!p.alive || p.dead) return;
-    // 敌人接触（自爆蜂 dmg=0 跳过，由殉爆结算）
-    const buf = this._contactBuf || (this._contactBuf = new Array(32));
-    const cnt = this.enemyHash.query(p.pos.x, p.pos.z, 3.4, buf);
-    for (let i = 0; i < cnt; i++) {
-      const e = buf[i];
-      if (!e.active || e.dying || e.dmg <= 0) continue;
-      const rr = e.radius + p.radius;
-      if (dist2(p.pos.x, p.pos.z, e.pos.x, e.pos.z) < rr * rr) {
-        const dealt = p.takeDamage(e.dmg, this);
-        if (dealt === 'shield') this.onShieldBreak();
-        else if (dealt !== false) this.onPlayerHurt(dealt, e.pos.x, e.pos.z);
+    if (p.alive && !p.dead) {
+      const buf = this._contactBuf || (this._contactBuf = new Array(32));
+      const cnt = this.enemyHash.query(p.pos.x, p.pos.z, 3.4, buf);
+      for (let i = 0; i < cnt; i++) {
+        const e = buf[i];
+        if (!e.active || e.dying || e.dmg <= 0) continue;
+        const rr = e.radius + p.radius;
+        if (dist2(p.pos.x, p.pos.z, e.pos.x, e.pos.z) < rr * rr) {
+          const dealt = p.takeDamage(e.dmg, this, ENEMY_NAMES[e.type] || '敌人接触');
+          if (dealt === 'shield') this.onShieldBreak();
+          else if (dealt !== false) this.onPlayerHurt(dealt, e.pos.x, e.pos.z);
+        }
       }
     }
-    // 敌弹
     for (const b of this.enemies.ebullets) {
       if (!b.active) continue;
-      const rr = 0.32 + p.radius * 0.85;
-      if (dist2(b.pos.x, b.pos.z, p.pos.x, p.pos.z) < rr * rr) {
-        b.active = false; b.mesh.visible = false;
-        const dealt = p.takeDamage(b.dmg, this);
-        if (dealt === 'shield') this.onShieldBreak();
-        else if (dealt !== false) this.onPlayerHurt(dealt, b.pos.x, b.pos.z);
+      if (p.alive && !p.dead) {
+        const rr = 0.32 + p.radius * 0.85;
+        const hit = segmentCircleHitFraction(b.prevX ?? b.pos.x, b.prevZ ?? b.pos.z, b.pos.x, b.pos.z, p.pos.x, p.pos.z, rr);
+        if (Number.isFinite(hit) && hit < (b.wallHitFraction ?? Infinity)) {
+          b.active = false; b.mesh.visible = false;
+          const dealt = p.takeDamage(b.dmg, this, '敌方弹幕');
+          if (dealt === 'shield') this.onShieldBreak();
+          else if (dealt !== false) this.onPlayerHurt(dealt, b.pos.x, b.pos.z);
+        }
       }
+      if (b.retireAfterCollision) { b.active = false; b.mesh.visible = false; }
     }
   }
 
@@ -1240,7 +1363,7 @@ export class Game {
     // 反噬（虚空 II）：受伤释放虚空新星
     if (this.routeTiers.void >= 2 && this.voidNovaCd <= 0) {
       this.voidNovaCd = 3;
-      this.areaDamage(p.pos.x, p.pos.z, 5.5, 32, { knock: 18, fromX: p.pos.x, fromZ: p.pos.z });
+      this.areaDamage(p.pos.x, p.pos.z, 5.5, 32, { damageKind: 'route', knock: 18, fromX: p.pos.x, fromZ: p.pos.z });
       this.shockwaves.fire(p.pos.x, p.pos.z, 5.5, 0xc77bff, 0.5);
       this.particles.burst(p.pos.x, 0.8, p.pos.z, 20, 0xc77bff, { speed: 10, life: 0.5, size: 0.7 });
       this.audio.nova();
@@ -1288,9 +1411,14 @@ export class Game {
 
   handleGlobalKeys() {
     const inp = this.input;
-    if (this.ui.settingsOpen) {
-      if (inp.justPressed('Escape')) this.ui.closeSettings();
+    if (this.ui.settingsOpen || this.ui.buildOpen || this.ui.menuOpen) {
+      if (inp.justPressed('Escape')) this.ui.closeTopDialog();
+      else if (this.ui.buildOpen && inp.justPressed('KeyB')) this.ui.closeBuild();
+      else if (this.ui.menuOpen && inp.justPressed('KeyP')) this.ui.closeMenu();
       return;
+    }
+    if (inp.justPressed('KeyB') && ['playing', 'paused', 'levelup'].includes(this.state)) {
+      this.ui.openBuild(); return;
     }
     if (inp.justPressed('KeyF') && !this.input.isTouch) {
       this.settings.autoAim = !this.settings.autoAim;
@@ -1316,7 +1444,7 @@ export class Game {
           if (inp.justPressed('Digit3') || inp.justPressed('Numpad3')) this.pickCard(2);
         }
         if (inp.justPressed('Escape') || inp.justPressed('KeyP')) {
-          if (this.mp) this.ui.toast('联机激战无法暂停', '#ff9f3e');
+          if (this.mp) this.ui.openMenu();
           else this.togglePause();
         }
         break;

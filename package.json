@@ -13,7 +13,12 @@
     "test:textures": "node scripts/texture_test.mjs",
     "test:actors": "node scripts/actor_art_test.mjs",
     "test:planets": "node scripts/planet_test.mjs",
-    "test:smoke": "node scripts/smoke.mjs"
+    "test:smoke": "node scripts/smoke.mjs",
+    "test:combat": "node scripts/combat_regression_test.mjs",
+    "test:game": "node scripts/game_rules_test.mjs",
+    "test:ui": "node scripts/ui_review_test.mjs",
+    "test:mp:rules": "node scripts/mp_rules_test.mjs",
+    "test:server": "python3 scripts/server_boundary_test.py"
   },
   "type": "module",
   "private": true,

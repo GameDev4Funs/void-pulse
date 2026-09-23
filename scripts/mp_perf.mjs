@@ -113,11 +113,16 @@ try {
 
   const stats = await Promise.all(pages.map((page) => page.evaluate(() => {
     const game = window.__DBG.game;
+    const gl = game.renderer.getContext();
+    const debug = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    const vendor = debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
     const samples = window.__fpsSamples.slice(-8);
     const frameTimes = window.__frameTimes.slice(-600).sort((a, b) => a - b);
     const p95 = frameTimes.length ? frameTimes[Math.floor((frameTimes.length - 1) * 0.95)] : Infinity;
     return {
       state: game.state,
+      renderer, vendor,
       planet: game.planet.id,
       time: game.time,
       enemies: game.enemies.list.filter((enemy) => enemy.active).length,
@@ -132,6 +137,7 @@ try {
   const maxBuffered = Math.max(...stats.map((stat) => stat.buffered));
   const maxFrameP95 = Math.max(...stats.map((stat) => stat.frameP95));
   const timeSpread = Math.max(...stats.map((stat) => stat.time)) - Math.min(...stats.map((stat) => stat.time));
+  check('四端使用可识别硬件GPU渲染器', stats.every(stat => /Apple|AMD|NVIDIA|Intel/i.test(stat.renderer) && !/SwiftShader|Software|llvmpipe/i.test(stat.renderer)));
   check('四端保持战斗状态', stats.every((stat) => stat.state === 'playing'));
   check('四端星球规则一致', stats.every((stat) => stat.planet === planet), `（${planet}）`);
   check('四端都收到敌人世界', stats.every((stat) => stat.enemies > 0));

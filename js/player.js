@@ -71,7 +71,7 @@ export class Player {
 
   reset() {
     this.pos = this.mesh.position;
-    this.pos.set(0, 0.75, 6);
+    this.pos.set(0, 0.75, 10);
     this.vel = new THREE.Vector3();
     this.aimDir = new THREE.Vector3(0, 0, -1);
     this.aimPoint = new THREE.Vector3(0, 0, 0);
@@ -134,21 +134,24 @@ export class Player {
     return true;
   }
 
-  takeDamage(raw, game) {
+  takeDamage(raw, game, cause = '敌方攻击') {
     if (!this.alive || this.dead || this.invulnerable) return false;
     // 护盾抵挡一次
     if (this.shield) {
       this.shield = false;
       this.shell.visible = false;
+      this.iFrames = PLAYER.contactIFrames;
       return 'shield';
     }
     const dmg = Math.max(1, Math.round(raw - this.stats.armor));
     this.stats.hp -= dmg;
+    game.lastDamageCause = cause;
     this.iFrames = PLAYER.contactIFrames;
     return dmg;
   }
 
   heal(n) {
+    if (!this.alive || this.dead || this.stats.hp <= 0) return 0;
     const real = Math.min(n, this.stats.maxHp - this.stats.hp);
     this.stats.hp += real;
     return real;
@@ -156,12 +159,13 @@ export class Player {
 
   update(dt, input, game) {
     if (!this.alive || this.dead) return;
-    const mv = input.moveVec();
+    const blocked = game.ui.blocksGameplayInput?.();
+    const mv = blocked ? { x: 0, z: 0, active: false } : input.moveVec();
     const speed = PLAYER.speed * this.stats.speedMul * (game.zoneSlowFactor || 1);
 
     // —— 冲刺 ——
     this.dashCdT = Math.max(0, this.dashCdT - dt);
-    if ((input.justPressed('Space') || input.justPressed('ShiftLeft') || input.justPressed('ShiftRight'))) {
+    if (!blocked && (input.justPressed('Space') || input.justPressed('ShiftLeft') || input.justPressed('ShiftRight'))) {
       if (this.tryDash(mv)) {
         game.audio.dash();
         game.shockwaves.fire(this.pos.x, this.pos.z, 2.2, PALETTE.player, 0.35);

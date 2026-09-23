@@ -1,6 +1,9 @@
 // ============ 升级系统：卡牌池 / 抽取 / 生效 ============
-import { MAX_WEAPON_LV } from './weapons.js';
+import { MAX_WEAPON_LV, WEAPON_TABLES, EVO_TABLES } from './weapons.js';
 import { pick } from './utils.js';
+import { PLAYER } from './config.js';
+
+const num = (n) => Number(n.toFixed(2)).toString();
 
 // kind: weapon(新武器/武器升级) | passive | bonus
 export const UPGRADES = [
@@ -10,9 +13,9 @@ export const UPGRADES = [
     tag: '主武器',
     desc: (lv) => [
       '朝瞄准方向自动射击的能量枪。',
-      '伤害 +40%。',
-      '额外发射 1 发子弹（扇形）。',
-      '射速 +35%，子弹可穿透 1 个目标。',
+      '提升单发伤害与发射频率。',
+      '额外发射 1 发子弹（扇形），提升发射频率。',
+      '提升伤害与发射频率，子弹可额外穿透 1 个目标。',
       '再 +1 发子弹，伤害全面提升。',
     ][lv - 1] || '',
   },
@@ -21,9 +24,9 @@ export const UPGRADES = [
     tag: '副武器',
     desc: (lv) => [
       '解锁：2 枚能量刃环绕机体，撕碎靠近的敌人。',
-      '能量刃 +1（共 3 枚）。',
+      '能量刃 +1（共 3 枚），提升伤害、范围与转速。',
       '伤害 +50%，转速提升。',
-      '能量刃 +1（共 4 枚），轨道扩大。',
+      '能量刃 +1（共 4 枚），提升伤害、范围与转速。',
       '能量刃 +1（共 5 枚），伤害大幅提升。',
     ][lv - 1] || '',
   },
@@ -32,8 +35,8 @@ export const UPGRADES = [
     tag: '副武器',
     desc: (lv) => [
       '解锁：周期性发射自动追踪的导弹，命中后范围爆炸。',
-      '导弹 +1（共 2 枚）。',
-      '冷却缩短，伤害 +35%。',
+      '导弹 +1（共 2 枚），提升伤害并缩短冷却。',
+      '缩短冷却并提升爆炸伤害。',
       '导弹 +1（共 3 枚），爆炸范围扩大。',
       '导弹 +1（共 4 枚），伤害大幅提升。',
     ][lv - 1] || '',
@@ -56,7 +59,7 @@ export const UPGRADES = [
       '解锁：周期性释放冲击新星，击退并伤害周围敌人。',
       '冲击半径扩大。',
       '冷却缩短，伤害提升。',
-      '伤害 +35%。',
+      '提升伤害并缩短冷却。',
       '冷却大幅缩短，半径与伤害全面提升。',
     ][lv - 1] || '',
   },
@@ -113,7 +116,7 @@ export const EVOLUTIONS = [
   {
     id: 'evo_blaster', base: 'blaster', needs: 'p_rate', kind: 'evolve',
     icon: '☄️', name: '湮灭射线', tag: '进化', needName: '超频模块',
-    desc: () => '脉冲枪终极形态：沉重炽亮的湮灭光束，无限穿透，一切皆为尘埃。',
+    desc: () => '将扇形三弹合为重型直线光束，拥有更强单体火力与无限穿透；需要把敌群引向同一直线。',
   },
   {
     id: 'evo_blades', base: 'blades', needs: 'p_speed', kind: 'evolve',
@@ -234,6 +237,62 @@ export class Upgrades {
     }
   }
 
+  // Numerical descriptions read the same tables and multipliers as combat.
+  weaponSummary(id, level = this.level(id), evolved = !!this.game.weapons.evolved[id]) {
+    const cfg = evolved ? EVO_TABLES[id] : WEAPON_TABLES[id]?.[level];
+    if (!cfg) return '尚未装备';
+    const g = this.game;
+    const dmg = g.weapons.finalDmg(cfg.dmg, false);
+    const rate = g.weapons.rateMul();
+    const parts = [`单次伤害 ${dmg}`];
+    if (cfg.rate) parts.push(`${num(cfg.rate * rate)} 轮/秒`, `每轮 ${cfg.shots} 发`, cfg.pierce >= 99 ? '无限穿透' : `额外穿透 ${cfg.pierce} 个`);
+    if (cfg.cd) parts.push(`间隔 ${num(cfg.cd / rate)} 秒`);
+    if (cfg.n) parts.push(`${cfg.n} ${id === 'blades' ? '枚轨道刃' : '枚导弹'}`);
+    if (cfg.chains) parts.push(`${cfg.chains} 链`);
+    if (cfg.aoe || cfg.radius) parts.push(`范围 ${num(cfg.aoe || cfg.radius)}m`);
+    if (cfg.rot) parts.push(`转速 ${num(cfg.rot * rate)} rad/s`, `同一敌人命中间隔 ≥${num(0.38 / rate)} 秒`);
+    if (evolved && id === 'blades') parts.push(`每 ${num(cfg.flingCd / rate)} 秒发射 8 枚飞刃（伤害 ${g.weapons.finalDmg(cfg.flingDmg, false)}）`);
+    if (evolved && id === 'missiles') parts.push(`每弹再分裂 ${cfg.bomblets} 枚子弹（伤害 ${g.weapons.finalDmg(cfg.bombletDmg, false)}）`);
+    if (evolved && id === 'tesla') parts.push(`命中点留下 ${cfg.zoneDur} 秒雷区`);
+    if (evolved && id === 'nova') parts.push('牵引敌人并获得护盾');
+    return parts.join(' · ');
+  }
+
+  passiveValue(id, next = false) {
+    const g = this.game, s = g.player.stats, n = next ? 1 : 0;
+    switch (id) {
+      case 'p_dmg': return `武器伤害 ×${num(s.dmgMul * g.routeFx.dmg * (1.12 ** n))}`;
+      case 'p_rate': return `武器频率 ×${num(g.weapons.rateMul() * (1.1 ** n))}`;
+      case 'p_speed': return `基础移动 ${num(PLAYER.speed * s.speedMul * (1.08 ** n))}m/秒`;
+      case 'p_hp': return `最大生命 ${s.maxHp + n * 25}${next ? '，立即修复 25' : ''}`;
+      case 'p_magnet': return `碎片吸取半径 ${num(s.magnet * (1.5 ** n))}m`;
+      case 'p_armor': return `每次伤害减免 ${s.armor + n * 2}，最低承受 1`;
+      case 'p_dash': return `冲刺冷却 ${num(Math.max(0.9, s.dashCd * (0.88 ** n)))} 秒`;
+      case 'p_crit': return `暴击率 ${num(Math.min(1, s.critCh + n * 0.08) * 100)}%，暴击伤害 ×${num(s.critMul)}`;
+      case 'p_chain': return `连锁窗口 ${num(g.chainWindow + n * 0.7)} 秒，额外得分 ×${num(g.chainScoreMul + n * 0.25)}`;
+      default: return '';
+    }
+  }
+
+  evolutionRecipe(base) {
+    const ev = EVOLUTIONS.find((e) => e.base === base);
+    if (!ev) return '';
+    if (this.game.weapons.evolved[base]) return `已进化：${ev.name}`;
+    const weapon = UPGRADES.find((u) => u.id === base);
+    const lv = this.game.weapons.level(base), passiveLv = this.level(ev.needs);
+    const missing = [];
+    if (lv < MAX_WEAPON_LV) missing.push(`${weapon.name}还差 ${MAX_WEAPON_LV - lv} 级`);
+    if (passiveLv < 1) missing.push(`缺少${ev.needName}`);
+    return `进化 → ${ev.name}：${weapon.name} LV${MAX_WEAPON_LV} + ${ev.needName} LV1。${missing.length ? missing.join('；') : '条件已满足，下次选卡可出现'}`;
+  }
+
+  nextBenefit(card) {
+    const cur = this.level(card.id);
+    if (card.kind === 'weapon') return this.weaponSummary(card.id, cur + 1, false);
+    if (card.kind === 'passive') return `${this.passiveValue(card.id)} → ${this.passiveValue(card.id, true)}`;
+    return card.desc(cur + 1);
+  }
+
   // 卡牌显示数据
   cardView(card) {
     const cur = this.level(card.id);
@@ -242,7 +301,7 @@ export class Upgrades {
       return {
         icon: card.icon, tag: '⚡ 进化', name: card.name,
         lvText: `${baseU.name || card.base} + ${card.needName} → EVOLVE`,
-        desc: card.desc(), cls: 'r-evolve',
+        desc: card.desc(), detail: `${this.weaponSummary(card.base)} → ${this.weaponSummary(card.base, MAX_WEAPON_LV, true)}`, recipe: '', cls: 'r-evolve',
         route: baseU.route, pips: '', isNew: false, owned: false,
       };
     }
@@ -262,6 +321,8 @@ export class Upgrades {
       name: card.name,
       lvText: card.max <= 90 ? (isNew ? 'UNLOCK' : `LV ${cur} → ${cur + 1}`) : 'SUPPLY',
       desc: card.desc(cur + 1),
+      detail: card.kind === 'weapon' ? `${cur ? '当前：' + this.weaponSummary(card.id) + ' → ' : ''}下级：${this.nextBenefit(card)}` : card.kind === 'passive' ? this.nextBenefit(card) : '',
+      recipe: card.kind === 'weapon' ? this.evolutionRecipe(card.id) : EVOLUTIONS.filter((ev) => ev.needs === card.id).map((ev) => this.evolutionRecipe(ev.base)).join(' / '),
       cls: isNew ? 'r-weapon' : card.kind === 'weapon' ? 'r-upgrade' : card.kind === 'passive' ? 'r-passive' : 'r-weapon',
       route: card.route || null,
       pips,

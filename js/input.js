@@ -15,7 +15,7 @@ export class Input {
     this.onFirstGesture = null;
 
     addEventListener('keydown', (e) => {
-      if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.code !== 'Escape' && e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
       // 原生按钮的 Enter/Space 属于 UI 激活，不能同时触发开战/冲刺。
       if (['Enter', 'Space'].includes(e.code) && e.target.closest?.('button, [role="button"], a[href]')) return;
       if (e.repeat) return;
@@ -33,6 +33,7 @@ export class Input {
     });
     addEventListener('mousedown', (e) => {
       this.gesture();
+      if (e.target.closest?.('button, input, select, .overlay')) return;
       if (e.button === 0) { this.mouseDown = true; this.pressed.add('MouseLeft'); }
       if (e.button === 2) { this.rightDown = true; this.pressed.add('MouseRight'); }
     });
@@ -58,12 +59,15 @@ export class Input {
 
     zone.addEventListener('touchstart', (e) => {
       e.preventDefault(); this.gesture();
+      if (this.joy.active) return;
       const t = e.changedTouches[0];
+      const rect = zone.getBoundingClientRect();
       this.joy.active = true; this.joy.id = t.identifier;
       this.joy.bx = t.clientX; this.joy.by = t.clientY;
       this.joy.x = 0; this.joy.y = 0;
       base.style.display = 'block';
-      base.style.left = t.clientX + 'px'; base.style.top = t.clientY + 'px';
+      base.style.left = (t.clientX - rect.left) + 'px'; base.style.top = (t.clientY - rect.top) + 'px';
+      nub.style.transform = 'translate(-50%,-50%)';
     }, { passive: false });
     zone.addEventListener('touchmove', (e) => {
       e.preventDefault();
@@ -92,6 +96,8 @@ export class Input {
       const el = document.getElementById(id);
       el.addEventListener('touchstart', (e) => { e.preventDefault(); this.gesture(); this.pressed.add(code); this.keys.add(code); }, { passive: false });
       el.addEventListener('touchend', (e) => { e.preventDefault(); this.keys.delete(code); }, { passive: false });
+      el.addEventListener('touchcancel', (e) => { e.preventDefault(); this.keys.delete(code); this.pressed.delete(code); }, { passive: false });
+      el.addEventListener('click', (e) => { if (e.detail === 0) { this.gesture(); this.pressed.add(code); } });
     };
     bindBtn('btn-dash', 'Space');
     bindBtn('btn-pulse', 'KeyQ');
