@@ -4,3 +4,6 @@ node_modules/
 __pycache__/
 *.py[cod]
 
+
+# Local research exports do not belong in the game repository.
+/scripts/*.csv
