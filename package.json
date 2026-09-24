@@ -1,7 +1,7 @@
 {
   "name": "void-pulse",
   "version": "1.0.0",
-  "description": "3D neon arena survivor web game",
+  "description": "Pilot a drone through alien swarms, evolve your weapons, and reclaim the reactor. Play solo in your browser or team up in 2–4 player LAN co-op.",
   "license": "MIT",
   "scripts": {
     "start": "python3 scripts/server.py",
